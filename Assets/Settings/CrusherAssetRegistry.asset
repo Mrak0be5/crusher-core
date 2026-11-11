@@ -1,0 +1,104 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: adfbdcd47d627e94eb143909ed457849, type: 3}
+  m_Name: CrusherAssetRegistry
+  m_EditorClassIdentifier: Assembly-CSharp::Crusher.Core.CrusherAssetRegistry
+  MainFont: {fileID: 11400000, guid: 9412b6db8f76b2a4180c70238c0adff2, type: 2}
+  SymbolsFallbackFont: {fileID: 11400000, guid: 67b056f083d45ce4e800e1737c9f95b5, type: 2}
+  MatSdfUi: {fileID: 2100000, guid: 741a32e720d2d0d41a9610403a5e4eca, type: 2}
+  IconAtlasTexture: {fileID: 2800000, guid: 07bce6abf7609784d9802679b4ebf35f, type: 3}
+  IconAtlasJson: {fileID: 4900000, guid: ff92e53b3d952084fa77032087bc0496, type: 3}
+  PrefabShredderCore: {fileID: 919132149155446097, guid: 8f221b7e1610c5443ba9402fd2f7ddd3, type: 3}
+  AnimCore: {fileID: 9100000, guid: 05589dd26b94bfe40919e9b892a47673, type: 2}
+  PrefabBossAtm: {fileID: 919132149155446097, guid: e4dd591acbeb73146a8ecaeb4878d0d5, type: 3}
+  AnimBossAtm: {fileID: 9100000, guid: 6fa10db4ecbff894cbc073734e642c86, type: 2}
+  PrefabElectromagnetBh: {fileID: 919132149155446097, guid: 72bfe851caef18446a4343665c76852a, type: 3}
+  AnimElectromagnetBh: {fileID: 9100000, guid: 2ce638a5982751a488a863d7abd4d498, type: 2}
+  PrefabRailEmitterDr: {fileID: 919132149155446097, guid: 1ce148dd8b13fb94d86afb3ec3124867, type: 3}
+  AnimRailEmitterDr: {fileID: 9100000, guid: f440049c0f18dfa46888fcfc8f61bf12, type: 2}
+  PrefabGoldenBot: {fileID: 919132149155446097, guid: 4f1e76b2aa7e6144cb35d89513c3c821, type: 3}
+  AnimGoldenBot: {fileID: 9100000, guid: 7d82a935d9439354bb07f18a731e7794, type: 2}
+  MeshEnemyBasic: {fileID: -4209573348000662242, guid: e36a55a5c8b13c14eb9212bdd2d79d1b, type: 3}
+  MeshEnemyFast: {fileID: -2717770053262339542, guid: 93ceeabb593b0ae4eace3da53fd791c0, type: 3}
+  MeshEnemyTank: {fileID: -6182365438204765234, guid: 791a0af3ed1a41c4483c3fbfd7f3d4fe, type: 3}
+  MeshEnemyRanged: {fileID: 7416390465139260647, guid: f79f3cef8f39255468032d8bb5f4e21d, type: 3}
+  MeshEnemyVampire: {fileID: 7376710891436153463, guid: 983b0150eb75d6b4fbc748b229a0a35f, type: 3}
+  MeshGoldIngot: {fileID: 1319306324545912801, guid: 9aea061c5e782bf4383e5c27762aba81, type: 3}
+  MeshPlasmaSawOrb: {fileID: -9047095129749702750, guid: db07a508f6cf58744ad374eb6df686a1, type: 3}
+  MeshProjectile: {fileID: 8201344237333511128, guid: 073a05663c7fd844a9d47a968bee8d11, type: 3}
+  MeshesDebrisChunks:
+  - {fileID: 6958832350539232881, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: -2355432432139837503, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: -2116525050318363632, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 5404477401210803334, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 8729950830410266704, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 1178186563266635633, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: -6926101072361281079, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 2147139526314939227, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 5662030196905946856, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 1617223814506948189, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: -6707926393883692749, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  - {fileID: 8498925928547088703, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
+  MatArenaFloor: {fileID: 2100000, guid: 0c0a68038e6889546b107831d1be7706, type: 2}
+  MatCoreChassis: {fileID: 2100000, guid: 3136b0e2f12c5a24f9502cc517af662c, type: 2}
+  MatCoreGrades:
+  - {fileID: 2100000, guid: b5c0254b4eacf8c46b7d56c04c054f7a, type: 2}
+  - {fileID: 2100000, guid: 4145b1f749b4fa64683a333bcb557ce6, type: 2}
+  - {fileID: 2100000, guid: 367c85265296b7d48adb1338a6d273ce, type: 2}
+  - {fileID: 2100000, guid: 9959162e6ec720b469c93e29a6e64851, type: 2}
+  MatBossAtm: {fileID: 2100000, guid: 8b5bdfb3254b49341843ed2808522642, type: 2}
+  MatElectromagnetBh: {fileID: 2100000, guid: c4ec2d1b100d2514aa82f51595d3876a, type: 2}
+  MatRailEmitterDr: {fileID: 2100000, guid: 6024c4c506a9ef84aa207a17f5ebe262, type: 2}
+  MatGoldenBot: {fileID: 2100000, guid: 8e45f47f608cd70459a50ff329922ff4, type: 2}
+  MatGemDrone: {fileID: 2100000, guid: 788c72a93b0e74f4b8bedd955e3e11fd, type: 2}
+  MatOrbSaw: {fileID: 2100000, guid: d7a17d3e549cc2f48b77de0b0138482b, type: 2}
+  MatEnemiesInstanced:
+  - {fileID: 2100000, guid: c5ddcec498d44e94fa1cdb8738826a80, type: 2}
+  - {fileID: 2100000, guid: 035675af6b111ae4b9d756d4f5eba358, type: 2}
+  - {fileID: 2100000, guid: be409cdf2ed80dc4fa015d866f749287, type: 2}
+  - {fileID: 2100000, guid: 8af50bf3046c78540a5ae80df43ec1af, type: 2}
+  - {fileID: 0}
+  - {fileID: 2100000, guid: add09bb1cb0898f4592c26f0c0c0522f, type: 2}
+  MatProjectilesInstanced: {fileID: 2100000, guid: 877403d7523569949a0ef8d39c78046a, type: 2}
+  MatDebrisInstanced: {fileID: 2100000, guid: 9f06a2d220252a04e8bc2e2325a000ba, type: 2}
+  MatWeldingSparksInstanced: {fileID: 2100000, guid: d9bf48e8e91dadf49b1b5e9a2b5fb7d0, type: 2}
+  MatGoldIngotInstanced: {fileID: 2100000, guid: 72e3905ccbeea124da178b7b830c3d45, type: 2}
+  MatBlackHoleVortex: {fileID: 2100000, guid: 37f95b4712b40674cba65db17eb2a2ec, type: 2}
+  MatGoldenBotField: {fileID: 2100000, guid: 3e74bba030ec12b41bc39a135222170f, type: 2}
+  MatBeamDeathRay: {fileID: 2100000, guid: c770aacefd6d55f419f638ac1d7e1f17, type: 2}
+  MatBeamVampireSiphon: {fileID: 2100000, guid: 612a1c0a17283df41b196ab87ab31127, type: 2}
+  MatBeamChainZap: {fileID: 2100000, guid: 2d47360a0bc4c9c4b879f686afafe2bb, type: 2}
+  ClipsCrunch:
+  - {fileID: 8300000, guid: c131e488a9b05b54787bf5144b75a4f9, type: 3}
+  - {fileID: 8300000, guid: eb90929ee5d15ea43935328ac660833b, type: 3}
+  - {fileID: 8300000, guid: a8171dc9756e1c14ba1b8aeefe3d0d83, type: 3}
+  - {fileID: 8300000, guid: 1fa2bff45966471408f9d7825bbaabd3, type: 3}
+  ClipBossShatter: {fileID: 8300000, guid: 2c7f1ba87725db54f97da10f11b60b9e, type: 3}
+  ClipRotorHumLoop: {fileID: 8300000, guid: 4afde923965af184c84ec2e086fca733, type: 3}
+  ClipsOrbSaw:
+  - {fileID: 8300000, guid: 61466b0f39ec74d4ead7decea2e7be24, type: 3}
+  - {fileID: 8300000, guid: f803bdf7b9e04094e99c002171a5826c, type: 3}
+  ClipPneumoShot: {fileID: 8300000, guid: 259c2eac101285047b0d3931a2ec80aa, type: 3}
+  ClipBlackHoleLoop: {fileID: 8300000, guid: fc3ecf068f857bc4b89d5a50f36be687, type: 3}
+  ClipGoldenStart: {fileID: 8300000, guid: 717a2ab9ebdf83248b43db181a314957, type: 3}
+  ClipsIngotDing:
+  - {fileID: 8300000, guid: 776fbe5921e2a5148b1f989af103b84d, type: 3}
+  - {fileID: 8300000, guid: 8c6d967c597443548893fe696cdb21ea, type: 3}
+  - {fileID: 8300000, guid: d53eb92e80141c14d8bb7332a67808d3, type: 3}
+  - {fileID: 8300000, guid: 166819afb5291a344a32189da6d0164b, type: 3}
+  - {fileID: 8300000, guid: 949794b3f0d49d5439b1851e21c34f00, type: 3}
+  ClipChainZap: {fileID: 8300000, guid: be91fab4281a59b40855811b1781cad0, type: 3}
+  ClipPlasmaHit: {fileID: 8300000, guid: bc9eb992733a97e4e8673ba6df223203, type: 3}
+  ClipUiTap: {fileID: 8300000, guid: 5e4c414ba7763c5418109abf981f91eb, type: 3}
+  ClipUiUpgrade: {fileID: 8300000, guid: a0d57bce0ceafc5429f677aaa27a4ec0, type: 3}
+  ClipUiUnlock: {fileID: 8300000, guid: 7746c045eb071644a942e02a4d9bcdb9, type: 3}
+  ClipOverloadDeath: {fileID: 8300000, guid: 44bcb818d94e754419f7fe04d90d2fcf, type: 3}

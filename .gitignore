@@ -1,0 +1,43 @@
+# Unity generated directories
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/.utmp/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Project staging & signing secrets
+/[Ss]taging/
+/[Kk]eystore/
+keystore_meta.json
+*.keystore
+*.jks
+/[Ww]eb/
+
+# Build artifacts & IDE files
+*.apk
+*.aab
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vs/
+.vscode/
+.idea/
+.venv/
+__pycache__/
+*.pyc

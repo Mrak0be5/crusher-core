@@ -1,0 +1,12 @@
+{
+  "allPass": true,
+  "seedsPerProfile": 100,
+  "A1_pass": true, "optRun1WaveMed": 10.00, "casRun1WaveMed": 10.00, "naiRun1WaveMed": 10.00,
+  "A2_pass": true, "optCleanSwampPct": 100.0, "casCleanSwampPct": 99.0,
+  "A3_pass": true, "optW30MinMed": 15.25, "casW30MinMed": 22.34,
+  "A4_pass": true, "optW50MinMed": 33.09, "casW50MinMed": 39.13,
+  "A5_pass": true, "fastestW100Min": 43.44, "seedsUnder42m": 0,
+  "A6_pass": true, "optBestWaveMed": 104.00, "optTier2Pct": 91.0, "casBestWaveMed": 82.50, "naiBestWaveMed": 70.50,
+  "A7_pass": true, "optAvgUnlockGapMin": 1.22, "optMaxGap45Min": 4.09, "gtBhCoinSharePct": 76.8,
+  "A8_pass": true, "maxActiveEnemies": 25
+}
