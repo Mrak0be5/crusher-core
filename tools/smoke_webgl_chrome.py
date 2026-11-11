@@ -149,6 +149,16 @@ class ChromeBridgeClient:
 
 
 QUIET_AND_PROBE_INIT_SCRIPT = r"""(() => {
+  try {
+    if (window.indexedDB && indexedDB.deleteDatabase) {
+      indexedDB.deleteDatabase("UnityCache");
+    }
+    const origFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const nextInit = Object.assign({}, init || {}, { cache: "reload" });
+      return origFetch(input, nextInit);
+    };
+  } catch (_) {}
   window.open = () => null;
   window.focus = () => {};
   window.alert = (m) => { (window.__ccErrors = window.__ccErrors || []).push("ALERT:" + m); };
@@ -213,9 +223,9 @@ def main():
         print(f"[1/5] Baseline user tabs recorded: count={len(baseline_pages)} (untouched)")
 
         page_id = bridge.open_background_page(baseline_pages)
-        bridge.call_tool("select_page", pageId=page_id, bringToFront=False)
-
         bust_url = f"{TARGET_URL}?smoke={int(time.time())}"
+        bridge.call_tool("select_page", pageId=page_id, bringToFront=False)
+        # Clear HTTP & IndexedDB cache for fresh verification of latest GitHub Pages deployment
         bridge.call_tool(
             "navigate_page",
             pageId=page_id,
