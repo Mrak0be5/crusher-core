@@ -30,6 +30,8 @@ namespace Crusher.Audio
         private float _clock;
         private bool _initialized;
 
+        public bool IsMuted { get; private set; }
+
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -71,6 +73,32 @@ namespace Crusher.Audio
 
             _rotorLoopSource = CreateLoopSource("Loop_RotorHum", _registry.ClipRotorHumLoop, 0.22f);
             _blackHoleLoopSource = CreateLoopSource("Loop_BlackHole", _registry.ClipBlackHoleLoop, 0f);
+            ApplyMuteStateToSources();
+        }
+
+        public void ToggleMute()
+        {
+            SetMuted(!IsMuted);
+        }
+
+        public void SetMuted(bool muted)
+        {
+            IsMuted = muted;
+            AudioListener.volume = muted ? 0f : 1f;
+            ApplyMuteStateToSources();
+        }
+
+        private void ApplyMuteStateToSources()
+        {
+            for (int i = 0; i < VOICE_POOL_SIZE; i++)
+            {
+                if (_voices[i] != null)
+                {
+                    _voices[i].mute = IsMuted;
+                }
+            }
+            if (_rotorLoopSource != null) _rotorLoopSource.mute = IsMuted;
+            if (_blackHoleLoopSource != null) _blackHoleLoopSource.mute = IsMuted;
         }
 
         private AudioSource CreateLoopSource(string objName, AudioClip clip, float initialVol)
@@ -256,7 +284,7 @@ namespace Crusher.Audio
 
         private void PlayVoice(AudioClip clip, float volume, float pitch, bool ignoreDuck)
         {
-            if (clip == null) return;
+            if (IsMuted || clip == null) return;
             AudioSource src = _voices[_voiceCursor];
             _voiceCursor = (_voiceCursor + 1) % VOICE_POOL_SIZE;
             if (src == null) return;

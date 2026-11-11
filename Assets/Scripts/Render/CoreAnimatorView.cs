@@ -16,9 +16,12 @@ namespace Crusher.Render
     public sealed class CoreAnimatorView : MonoBehaviour
     {
         private const int MAX_ORB_VISUALS = CombatSim.ORB_CAPACITY;
+        private const int MAX_SHOCKWAVES = 8;
         private const int MAX_RIBBON_SEGMENTS = 40;
         private const int MAX_RIBBON_VERTS = MAX_RIBBON_SEGMENTS * 4;
         private const int MAX_RIBBON_INDICES = MAX_RIBBON_SEGMENTS * 6;
+
+        public static float LatestAimYawRad { get; private set; }
 
         private static readonly int PropGlobalGolden = Shader.PropertyToID("_GlobalGoldenOverdrive");
         private static readonly int PropGlobalHeat = Shader.PropertyToID("_GlobalRotorHeat");
@@ -29,6 +32,9 @@ namespace Crusher.Render
         private static readonly int PropHeatGlow = Shader.PropertyToID("_HeatGlow");
         private static readonly int PropHitFlash = Shader.PropertyToID("_HitFlash");
         private static readonly int PropIntensity = Shader.PropertyToID("_Intensity");
+        private static readonly int PropHorizonRadius = Shader.PropertyToID("_HorizonRadius");
+        private static readonly int PropInnerRimColor = Shader.PropertyToID("_InnerRimColor");
+        private static readonly int PropSwirlColor = Shader.PropertyToID("_SwirlColor");
         private static readonly int PropGarlicIntensity = Shader.PropertyToID("_GarlicIntensity");
         private static readonly int PropFade = Shader.PropertyToID("_Fade");
 
@@ -67,6 +73,23 @@ namespace Crusher.Render
 
         private GameObject _gemDroneObj;
         private Animator _gemDroneAnimator;
+        private GameObject _foundryEnvObj;
+
+        private struct ShockwaveState
+        {
+            public bool Active;
+            public Vector3 Position;
+            public float MaxDiameter;
+            public float Age;
+            public float Duration;
+            public Color RimColor;
+            public Color SwirlColor;
+        }
+
+        private readonly GameObject[] _shockwaveQuads = new GameObject[MAX_SHOCKWAVES];
+        private readonly MeshRenderer[] _shockwaveRenderers = new MeshRenderer[MAX_SHOCKWAVES];
+        private readonly ShockwaveState[] _shockwaves = new ShockwaveState[MAX_SHOCKWAVES];
+        private int _shockwaveCursor;
 
         // Pre-allocated dynamic ribbon meshes for DeathRay, VampireSiphon, and ChainZap
         private Mesh _deathRayMesh;
@@ -85,6 +108,7 @@ namespace Crusher.Render
         private MaterialPropertyBlock _floorMpb;
         private MaterialPropertyBlock _vortexMpb;
         private MaterialPropertyBlock _botFieldMpb;
+        private MaterialPropertyBlock _shockwaveMpb;
         private MaterialPropertyBlock _siphonMpb;
 
         private CoreVisualGrade _activeGrade = (CoreVisualGrade)(-1);
@@ -92,10 +116,12 @@ namespace Crusher.Render
         private float _targetAimYawDeg;
         private float _goldenBlend;
         private float _rotorHeatBlend;
+        private float _killStreakHeat;
         private float _coreHitFlash;
         private bool _fireLeftNext = true;
         private bool _wasBhActive;
         private bool _wasDrActive;
+        private bool _wasGtActive;
         private double _prevCoreHp;
         private bool _initialized;
 
@@ -110,12 +136,14 @@ namespace Crusher.Render
             _floorMpb = new MaterialPropertyBlock();
             _vortexMpb = new MaterialPropertyBlock();
             _botFieldMpb = new MaterialPropertyBlock();
+            _shockwaveMpb = new MaterialPropertyBlock();
             _siphonMpb = new MaterialPropertyBlock();
 
             PrecomputeRibbonIndices();
             BuildCoreHierarchy();
             BuildOrbPool();
             BuildSatelliteHierarchy();
+            BuildShockwavePool();
             BuildRibbonRenderers();
 
             Shader.SetGlobalFloat(PropGlobalGolden, 0f);
@@ -247,6 +275,66 @@ namespace Crusher.Render
 
             _goldenBotFieldQuad = CreateHorizontalDiskQuad("GoldenBot_FieldDisk", _registry.MatGoldenBotField, out _goldenBotFieldRenderer);
             _goldenBotFieldQuad.SetActive(false);
+
+            // 5. Industrial Foundry Hall & Recessed Pit Static Environment (SM_ArenaFoundryEnv)
+            GameObject existingEnv = GameObject.Find("ArenaFoundryEnv");
+            if (existingEnv != null)
+            {
+                _foundryEnvObj = existingEnv;
+                if (_registry.MatFoundryEnvLit != null)
+                {
+                    AssignMaterialRecursive(_foundryEnvObj, _registry.MatFoundryEnvLit);
+                }
+            }
+            else if (_registry.PrefabArenaFoundryEnv != null)
+            {
+                _foundryEnvObj = Instantiate(_registry.PrefabArenaFoundryEnv, transform);
+                _foundryEnvObj.name = "ArenaFoundryEnv";
+                _foundryEnvObj.transform.localPosition = Vector3.zero;
+                _foundryEnvObj.transform.localRotation = Quaternion.identity;
+                _foundryEnvObj.transform.localScale = Vector3.one;
+                AssignMaterialRecursive(_foundryEnvObj, _registry.MatFoundryEnvLit != null ? _registry.MatFoundryEnvLit : _registry.MatCoreChassis);
+            }
+        }
+
+        private void BuildShockwavePool()
+        {
+            Material swMat = _registry.MatShockwaveRing != null ? _registry.MatShockwaveRing : _registry.MatGoldenBotField;
+            for (int i = 0; i < MAX_SHOCKWAVES; i++)
+            {
+                _shockwaveQuads[i] = CreateHorizontalDiskQuad("ShockwaveRing_" + i, swMat, out _shockwaveRenderers[i]);
+                _shockwaveQuads[i].SetActive(false);
+            }
+        }
+
+        public void ClearShockwaves()
+        {
+            for (int i = 0; i < MAX_SHOCKWAVES; i++)
+            {
+                _shockwaves[i].Active = false;
+                if (_shockwaveQuads[i] != null && _shockwaveQuads[i].activeSelf)
+                {
+                    _shockwaveQuads[i].SetActive(false);
+                }
+            }
+        }
+
+        public void SpawnShockwaveRing(Vector3 worldPos, float maxDiameter, float duration, Color hdrRim, Color hdrSwirl, float initialProgress01 = 0f)
+        {
+            if (!_initialized) return;
+            int idx = _shockwaveCursor;
+            _shockwaveCursor = (_shockwaveCursor + 1) % MAX_SHOCKWAVES;
+            float dur = Mathf.Max(0.12f, duration);
+            _shockwaves[idx] = new ShockwaveState
+            {
+                Active = true,
+                Position = new Vector3(worldPos.x, 0.12f, worldPos.z),
+                MaxDiameter = Mathf.Max(1.5f, maxDiameter),
+                Age = Mathf.Clamp01(initialProgress01) * dur,
+                Duration = dur,
+                RimColor = hdrRim,
+                SwirlColor = hdrSwirl
+            };
         }
 
         private GameObject CreateHorizontalDiskQuad(string objName, Material mat, out MeshRenderer mr)
@@ -372,16 +460,64 @@ namespace Crusher.Render
             bool inRun = session.InRun;
             bool gtActive = inRun && sim.GoldenTower.Active;
 
-            // 1. Global shader uniforms (Golden Smelter Overdrive & Rotor Heat)
+            // 1. Global shader uniforms (Golden Smelter Overdrive & Dynamic Kill-Streak Rotor Heat)
             _goldenBlend = Mathf.MoveTowards(_goldenBlend, gtActive ? 1f : 0f, dt * 3.5f);
+            _killStreakHeat = Mathf.Max(0f, _killStreakHeat - dt * 0.30f);
+
+            if (inRun)
+            {
+                for (int k = 0; k < sim.KillEventCount; k++)
+                {
+                    ref KillEvent ev = ref sim.KillEvents[k];
+                    _killStreakHeat = Mathf.Min(1.35f, _killStreakHeat + (ev.Type == EnemyType.Boss ? 0.65f : 0.14f));
+
+                    Vector3 killPos = new Vector3(GameIdsAndScale.SimToWorld(ev.PosX), 0.12f, GameIdsAndScale.SimToWorld(ev.PosY));
+                    if (ev.Type == EnemyType.Boss)
+                    {
+                        SpawnShockwaveRing(
+                            killPos, 10.5f, 0.52f,
+                            new Color(4.80f, 2.20f, 0.45f, 1f),
+                            new Color(3.60f, 0.55f, 0.18f, 1f));
+                    }
+                    else if ((ev.Type == EnemyType.Tank || ev.Type == EnemyType.Vampire) && ev.KilledByOrbOrRay)
+                    {
+                        SpawnShockwaveRing(
+                            killPos, 4.8f, 0.32f,
+                            new Color(1.20f, 3.80f, 5.40f, 1f),
+                            new Color(0.55f, 1.40f, 3.20f, 1f));
+                    }
+                }
+
+                for (int s = 0; s < sim.SfxCount; s++)
+                {
+                    if (sim.SfxQueue[s] == SfxId.PlasmaHit)
+                    {
+                        Vector3 hitPos = FindPlasmaImpactWorldPos(sim);
+                        SpawnShockwaveRing(
+                            hitPos, 6.2f, 0.38f,
+                            new Color(1.60f, 4.40f, 6.20f, 1f),
+                            new Color(0.65f, 1.85f, 4.20f, 1f));
+                    }
+                }
+
+                if (gtActive && !_wasGtActive)
+                {
+                    SpawnShockwaveRing(
+                        Vector3.zero, 12.5f, 0.58f,
+                        new Color(4.60f, 3.10f, 0.55f, 1f),
+                        new Color(2.80f, 1.45f, 0.18f, 1f));
+                }
+            }
+            _wasGtActive = gtActive;
+
             float targetHeat = 0.0f;
             if (inRun)
             {
-                targetHeat = 0.06f + 0.05f * Mathf.Clamp(session.EffectiveTimeScale - 1f, 0f, 4f);
+                targetHeat = 0.06f + 0.05f * Mathf.Clamp(session.EffectiveTimeScale - 1f, 0f, 4f) + _killStreakHeat * 0.72f;
                 if (sim.HeatingUpActive) targetHeat += 0.42f;
-                if (gtActive) targetHeat = Mathf.Max(targetHeat, 0.55f);
+                if (gtActive) targetHeat = Mathf.Max(targetHeat, 0.62f);
             }
-            _rotorHeatBlend = Mathf.MoveTowards(_rotorHeatBlend, targetHeat, dt * 2.5f);
+            _rotorHeatBlend = Mathf.MoveTowards(_rotorHeatBlend, targetHeat, dt * 2.8f);
 
             Shader.SetGlobalFloat(PropGlobalGolden, _goldenBlend);
             Shader.SetGlobalFloat(PropGlobalHeat, _rotorHeatBlend);
@@ -425,8 +561,9 @@ namespace Crusher.Render
             UpdateDeathRayEmitter(sim, inRun, dt);
             UpdateGoldenBotAndGemDrone(sim, session, worldCam, inRun, dt);
 
-            // 7. Dynamic Volumetric Beams (Death Ray, Vampire Siphon + Garlic, Chain Lightning)
+            // 7. Dynamic Volumetric Beams (Death Ray, Vampire Siphon + Garlic, Chain Lightning) & Shockwave Rings
             UpdateDynamicBeams(sim, inRun, rangeWorld);
+            UpdateShockwaveRings(dt);
 
             // Step Animators explicitly when running offscreen in EditMode
             if (!Application.isPlaying)
@@ -547,6 +684,64 @@ namespace Crusher.Render
             }
 
             _currentAimYawDeg = Mathf.MoveTowardsAngle(_currentAimYawDeg, _targetAimYawDeg, dt * 540.0f);
+            LatestAimYawRad = _currentAimYawDeg * Mathf.Deg2Rad;
+        }
+
+        private Vector3 FindPlasmaImpactWorldPos(CombatSim sim)
+        {
+            for (int i = 0; i < sim.ActiveEnemyCount; i++)
+            {
+                if (sim.Enemies[i].Type == EnemyType.Boss)
+                {
+                    return new Vector3(
+                        GameIdsAndScale.SimToWorld(sim.Enemies[i].PosX),
+                        0.12f,
+                        GameIdsAndScale.SimToWorld(sim.Enemies[i].PosY));
+                }
+            }
+            float yawRad = _currentAimYawDeg * Mathf.Deg2Rad;
+            return new Vector3(Mathf.Sin(yawRad) * 3.8f, 0.12f, Mathf.Cos(yawRad) * 3.8f);
+        }
+
+        private void UpdateShockwaveRings(float dt)
+        {
+            for (int i = 0; i < MAX_SHOCKWAVES; i++)
+            {
+                if (!_shockwaves[i].Active) continue;
+                ref ShockwaveState sw = ref _shockwaves[i];
+
+                sw.Age += dt;
+                if (sw.Age >= sw.Duration)
+                {
+                    sw.Active = false;
+                    if (_shockwaveQuads[i] != null && _shockwaveQuads[i].activeSelf)
+                    {
+                        _shockwaveQuads[i].SetActive(false);
+                    }
+                    continue;
+                }
+
+                float t = Mathf.Clamp01(sw.Age / sw.Duration);
+                float easeOut = 1.0f - (1.0f - t) * (1.0f - t);
+                float frontUv = Mathf.Lerp(0.14f, 0.92f, easeOut);
+                float fade = (1.0f - t) * Mathf.Sqrt(1.0f - t);
+
+                GameObject quad = _shockwaveQuads[i];
+                MeshRenderer mr = _shockwaveRenderers[i];
+                if (quad != null && mr != null)
+                {
+                    if (!quad.activeSelf) quad.SetActive(true);
+                    quad.transform.localPosition = sw.Position;
+                    quad.transform.localScale = new Vector3(sw.MaxDiameter, 1f, sw.MaxDiameter);
+
+                    mr.GetPropertyBlock(_shockwaveMpb);
+                    _shockwaveMpb.SetFloat(PropHorizonRadius, frontUv);
+                    _shockwaveMpb.SetFloat(PropIntensity, 1.45f * fade);
+                    _shockwaveMpb.SetColor(PropInnerRimColor, sw.RimColor);
+                    _shockwaveMpb.SetColor(PropSwirlColor, sw.SwirlColor);
+                    mr.SetPropertyBlock(_shockwaveMpb);
+                }
+            }
         }
 
         private void UpdateOrbs(CombatSim sim, bool inRun, float dt)

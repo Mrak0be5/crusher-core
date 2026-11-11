@@ -1,22 +1,26 @@
 using System;
+using System.Globalization;
 using System.Text;
+using Crusher.Audio;
 using Crusher.Config;
 using Crusher.Sim;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 namespace Crusher.UI
 {
     /// <summary>
-    /// Full 1080x2400 industrial portrait Combat HUD:
-    /// Top telemetry & currencies, diegetic rotor HP/regen ring, <=6 aggregated damage popups,
-    /// interactive Gem Drone (+5), toast/FTUE banners, 42% bottom 3-tab upgrade deck with FTUE arrow,
-    /// Ultimate Weapon 3-choice modal, and Run Summary modal.
+    /// Adaptive Industrial Combat HUD (Crusher Core V2 Ultra):
+    /// - FullScreenArenaOverlay (outside SafeAreaRoot): pixel-perfect concentric 24-segment Rotor HP/Regen ring,
+    ///   <=6 pooled DamageNumberAggregator popups, and 3D-tracked GemDrone (+5) button via ScreenPointToLocalPointInRectangle.
+    /// - Adaptive Mobile Portrait (1080x2400, 2-col 41.8% deck) & PC WebGL Landscape (1920x1080, 1320px compact top bar + 1420px 27% 4/5-col deck).
+    /// - Live industrial telemetry ("⚡ DPS • ОБОРОТЫ RPM • УБИТО"), Mute button ("ЗВУК ВКЛ/ВЫКЛ"), tactile hover/press tweens, and PC hotkeys.
     /// </summary>
     public sealed class HudScreen
     {
-        private const int MaxDeckCards = 10; // Defense has 10 stats max (2 cols x 5 rows)
+        private const int MaxDeckCards = 10; // Defense has 10 stats max
         private static readonly int[] BuyMultSteps = { 1, 5, 10, -1 }; // -1 = MAX
         private static readonly string[] BuyMultLabels = { "КРАТН ×1", "КРАТН ×5", "КРАТН ×10", "КРАТН MAX" };
         private static readonly float[] SpeedSteps = { 1.0f, 1.5f, 2.0f, 2.7f, 3.5f, 4.3f, 5.0f };
@@ -26,11 +30,13 @@ namespace Crusher.UI
             public RectTransform Root;
             public Image CardBg;
             public Button CardWholeBtn;
+            public RectTransform IconRect;
             public Image Icon;
             public TextMeshProUGUI Title;
             public TextMeshProUGUI LevelBadge;
             public TextMeshProUGUI ValueTransition;
             public Button BuyBtn;
+            public RectTransform BuyRect;
             public Image BuyBg;
             public TextMeshProUGUI BuyLabel;
 
@@ -45,42 +51,67 @@ namespace Crusher.UI
         private struct UwChoiceRow
         {
             public RectTransform Root;
+            public RectTransform IconRect;
             public Image Icon;
             public TextMeshProUGUI Title;
             public TextMeshProUGUI Desc;
             public Button PickBtn;
+            public RectTransform PickRect;
             public Image PickBg;
             public TextMeshProUGUI PickLabel;
             public UwId BoundUw;
         }
 
-        private RectTransform _root;
+        private struct CurrencyPillRefs
+        {
+            public RectTransform Rect;
+            public RectTransform IconRect;
+            public TextMeshProUGUI ValueTmp;
+        }
+
+        private RectTransform _arenaOverlay; // Full-screen outside SafeAreaRoot!
+        private RectTransform _root;         // Inside SafeAreaRoot
         private RectTransform _combatLayer;
         private Canvas _canvas;
         private UiStyle _style;
         private TweenRunner _tweens;
         private Camera _worldCam;
         private Action<int> _onOpenHangar;
+        private bool _isLandscape;
+        private int _lastCardLayoutCols = -1;
 
         // Top HUD widgets & caches
+        private RectTransform _topPanelRect;
+        private RectTransform _tierPillRect;
         private TextMeshProUGUI _tierBadgeTmp;
+        private RectTransform _waveBoxRect;
         private TextMeshProUGUI _waveTitleTmp;
         private TextMeshProUGUI _waveSubTmp;
+        private RectTransform _telemetryStripRect;
+        private TextMeshProUGUI _telemetryTmp;
+
         private Button _speedBtn;
         private RectTransform _speedBtnRect;
         private TextMeshProUGUI _speedLabelTmp;
+
+        private Button _muteBtn;
+        private RectTransform _muteBtnRect;
+        private Image _muteBtnBg;
+        private TextMeshProUGUI _muteLabelTmp;
+        private int _cachedMuteState = -1;
+
         private Button _retreatBtn;
-        private TextMeshProUGUI _cashTmp;
-        private TextMeshProUGUI _coinsTmp;
-        private TextMeshProUGUI _gemsTmp;
-        private TextMeshProUGUI _stonesTmp;
-        private TextMeshProUGUI _cellsTmp;
+        private RectTransform _retreatBtnRect;
+        private TextMeshProUGUI _retreatLabelTmp;
+
+        private readonly CurrencyPillRefs[] _curPills = new CurrencyPillRefs[5];
 
         private int _cachedTier = -1;
         private int _cachedWaveKey = -1;
         private int _cachedWaveSubSec = -999;
         private bool _cachedInCooldown;
         private int _cachedSpeedTenths = -1;
+        private long _cachedTelemetryKey = long.MinValue;
         private long _cachedCash = -1;
         private long _cachedCoins = -1;
         private int _cachedGems = -1;
@@ -96,22 +127,25 @@ namespace Crusher.UI
         private CanvasGroup _toastGroup;
         private TextMeshProUGUI _toastTmp;
         private float _toastTimer;
+        private float _toastTargetY = -284f;
 
-        // Diegetic Core HP Ring
+        // Diegetic Core HP Ring (in _arenaOverlay!)
         private RectTransform _hpRingRoot;
+        private RectTransform _hpPlateRect;
         private TextMeshProUGUI _hpNumericTmp;
         private TextMeshProUGUI _hpArmorSubTmp;
         private float _displayedTrailRatio = 1.0f;
         private long _cachedHpKey = -1;
         private long _cachedArmorKey = -1;
 
-        // Damage numbers & Gem Drone
+        // Damage numbers & Gem Drone (in _arenaOverlay!)
         private readonly DamageNumberAggregator _dmgNumbers = new DamageNumberAggregator();
         private RectTransform _gemDroneBtnRect;
         private Button _gemDroneBtn;
 
-        // Bottom Combat Deck (42% height = 1004 px)
+        // Bottom Combat Deck
         private RectTransform _deckRect;
+        private RectTransform _deckHeaderRect;
         private TextMeshProUGUI _deckTitleTmp;
         private TextMeshProUGUI _coreGradeTmp;
         private Button _uwQuickBtn;
@@ -125,11 +159,22 @@ namespace Crusher.UI
         private readonly StatCardWidget[] _cards = new StatCardWidget[MaxDeckCards];
         private int _visibleCardCount;
 
-        // Bottom Tabs & Multiplier buttons
+        // Bottom / Left Rail Tabs & Multiplier buttons
         private Image _tabAttackBg;
+        private RectTransform _tabAttackRect;
+        private RectTransform _tabAttackIconRect;
+        private TextMeshProUGUI _tabAttackLbl;
+
         private Image _tabDefenseBg;
-        private Image _tabUtilityBg;
         private RectTransform _tabDefenseRect;
+        private RectTransform _tabDefenseIconRect;
+        private TextMeshProUGUI _tabDefenseLbl;
+
+        private Image _tabUtilityBg;
+        private RectTransform _tabUtilityRect;
+        private RectTransform _tabUtilityIconRect;
+        private TextMeshProUGUI _tabUtilityLbl;
+
         private Button _multBtn;
         private RectTransform _multBtnRect;
         private TextMeshProUGUI _multLabelTmp;
@@ -139,14 +184,17 @@ namespace Crusher.UI
         private TextMeshProUGUI _ftueArrowTmp;
         private bool _run1DefensePurchased;
 
-        // UW Choice Modal
+        // UW Choice Modal (shared over HUD & Hangar)
         private RectTransform _uwModalRoot;
+        private RectTransform _uwModalWinRect;
         private CanvasGroup _uwModalGroup;
         private TextMeshProUGUI _uwModalSubTmp;
         private readonly UwChoiceRow[] _uwRows = new UwChoiceRow[3];
 
         // Run Summary Modal (Game Over)
         private RectTransform _summaryModalRoot;
+        private RectTransform _summaryWinRect;
+        private RectTransform _summaryStatsBoxRect;
         private CanvasGroup _summaryModalGroup;
         private TextMeshProUGUI _sumTitleTmp;
         private TextMeshProUGUI _sumStatsTmp;
@@ -160,6 +208,7 @@ namespace Crusher.UI
         public bool IsSummaryModalOpen => _summaryOpen;
 
         public void Build(
+            Transform fullScreenArenaParent,
             Transform safeParent,
             Canvas canvas,
             UiStyle style,
@@ -173,6 +222,10 @@ namespace Crusher.UI
             _worldCam = worldCam;
             _onOpenHangar = onOpenHangar;
 
+            // 1. Full-Screen Diegetic Overlay (OUTSIDE SafeAreaRoot so rotor ring is 100% concentric!)
+            _arenaOverlay = UiFactory.CreateStretchRect("HudArenaOverlay", fullScreenArenaParent);
+
+            // 2. Safe-Area Anchored Chrome
             _root = UiFactory.CreateStretchRect("HudScreen", safeParent);
             _combatLayer = UiFactory.CreateStretchRect("CombatLayer", _root);
 
@@ -182,15 +235,9 @@ namespace Crusher.UI
             BuildUwChoiceModal(safeParent);
             BuildRunSummaryModal();
 
+            ApplyLayoutMode(false);
             ApplyTabVisuals();
-        }
-
-        public void BringSharedModalsToFront()
-        {
-            if (_uwModalRoot != null)
-            {
-                _uwModalRoot.SetAsLastSibling();
-            }
+            RefreshMuteVisual(force: true);
         }
 
         public void SetWorldCamera(Camera worldCam)
@@ -205,6 +252,11 @@ namespace Crusher.UI
             {
                 _root.gameObject.SetActive(visible);
             }
+            bool showArenaOverlay = visible && !_summaryOpen;
+            if (_arenaOverlay != null && _arenaOverlay.gameObject.activeSelf != showArenaOverlay)
+            {
+                _arenaOverlay.gameObject.SetActive(showArenaOverlay);
+            }
         }
 
         public void DismissModals()
@@ -212,6 +264,393 @@ namespace Crusher.UI
             _summaryOpen = false;
             if (_summaryModalRoot != null) _summaryModalRoot.gameObject.SetActive(false);
             if (_uwModalRoot != null) _uwModalRoot.gameObject.SetActive(false);
+            if (_arenaOverlay != null && _root != null && _root.gameObject.activeSelf)
+            {
+                _arenaOverlay.gameObject.SetActive(true);
+            }
+        }
+
+        public void BringSharedModalsToFront()
+        {
+            if (_uwModalRoot != null)
+            {
+                _uwModalRoot.SetAsLastSibling();
+            }
+        }
+
+        public void ApplyLayoutMode(bool isLandscape)
+        {
+            _isLandscape = isLandscape;
+            _lastCardLayoutCols = -1;
+            _cachedHeaderGrade = -1;
+
+            if (!isLandscape)
+            {
+                // --- PORTRAIT 1080x2400 LAYOUT ---
+                _hpRingRoot.sizeDelta = new Vector2(264f, 264f);
+                _hpPlateRect.anchoredPosition = new Vector2(0f, -152f);
+                _hpPlateRect.sizeDelta = new Vector2(316f, 64f);
+
+                _topPanelRect.anchoredPosition = new Vector2(0f, -14f);
+                _topPanelRect.sizeDelta = new Vector2(1044f, 226f);
+
+                _tierPillRect.anchoredPosition = new Vector2(16f, -14f);
+                _tierPillRect.sizeDelta = new Vector2(124f, 70f);
+                _tierBadgeTmp.fontSize = 23f;
+
+                _waveBoxRect.anchoredPosition = new Vector2(150f, -14f);
+                _waveBoxRect.sizeDelta = new Vector2(382f, 70f);
+                _waveTitleTmp.enableAutoSizing = true;
+                _waveTitleTmp.fontSizeMin = 15f;
+                _waveTitleTmp.fontSizeMax = 23f;
+                _waveSubTmp.fontSize = 17.5f;
+
+                _speedBtnRect.anchoredPosition = new Vector2(542f, -14f);
+                _speedBtnRect.sizeDelta = new Vector2(138f, 70f);
+                _speedLabelTmp.fontSize = 24f;
+
+                _muteBtnRect.anchoredPosition = new Vector2(690f, -14f);
+                _muteBtnRect.sizeDelta = new Vector2(146f, 70f);
+                _muteLabelTmp.fontSize = 18f;
+
+                _retreatBtnRect.anchoredPosition = new Vector2(846f, -14f);
+                _retreatBtnRect.sizeDelta = new Vector2(182f, 70f);
+                _retreatLabelTmp.fontSize = 22f;
+
+                // Row 2: Live Industrial Telemetry Strip
+                _telemetryStripRect.anchoredPosition = new Vector2(16f, -92f);
+                _telemetryStripRect.sizeDelta = new Vector2(1012f, 44f);
+                _telemetryTmp.enableAutoSizing = true;
+                _telemetryTmp.fontSizeMin = 13f;
+                _telemetryTmp.fontSizeMax = 19f;
+
+                // Row 3: 5 Currency Pills
+                float[] px = { 16f, 248f, 468f, 660f, 846f };
+                float[] pw = { 222f, 210f, 182f, 176f, 182f };
+                for (int i = 0; i < 5; i++)
+                {
+                    _curPills[i].Rect.anchoredPosition = new Vector2(px[i], -144f);
+                    _curPills[i].Rect.sizeDelta = new Vector2(pw[i], 68f);
+                    _curPills[i].IconRect.sizeDelta = new Vector2(44f, 44f);
+                    _curPills[i].ValueTmp.fontSize = 22f;
+                    _curPills[i].ValueTmp.rectTransform.offsetMin = new Vector2(58f, 4f);
+                }
+
+                _synergyRect.anchoredPosition = new Vector2(0f, -248f);
+                _synergyRect.sizeDelta = new Vector2(880f, 54f);
+                _toastTargetY = -310f;
+                _toastRect.anchoredPosition = new Vector2(0f, _toastTargetY);
+                _toastRect.sizeDelta = new Vector2(940f, 68f);
+
+                // Bottom 41.8% Combat Deck (1080x1004)
+                _deckRect.anchoredPosition = Vector2.zero;
+                _deckRect.sizeDelta = new Vector2(1080f, 1004f);
+
+                _deckHeaderRect.anchoredPosition = new Vector2(0f, 918f);
+                _deckHeaderRect.sizeDelta = new Vector2(1040f, 72f);
+                _deckTitleTmp.fontSize = 22f;
+                _coreGradeTmp.fontSize = 19f;
+                _uwQuickRect.sizeDelta = new Vector2(280f, 56f);
+
+                // Bottom Tabs (matching smoke_tt36p.py coordinates)
+                ConfigurePortraitTab(_tabAttackRect, _tabAttackIconRect, _tabAttackLbl, -392f, "АТАКА");
+                ConfigurePortraitTab(_tabDefenseRect, _tabDefenseIconRect, _tabDefenseLbl, -132f, "ЗАЩИТА");
+                ConfigurePortraitTab(_tabUtilityRect, _tabUtilityIconRect, _tabUtilityLbl, 128f, "УТИЛИТИ");
+
+                _multBtnRect.anchorMin = new Vector2(0.5f, 0f);
+                _multBtnRect.anchorMax = new Vector2(0.5f, 0f);
+                _multBtnRect.pivot = new Vector2(0.5f, 0f);
+                _multBtnRect.anchoredPosition = new Vector2(390f, 32f);
+                _multBtnRect.sizeDelta = new Vector2(246f, 140f);
+                _multLabelTmp.fontSize = 23f;
+
+                // Modals (Portrait)
+                _uwModalWinRect.sizeDelta = new Vector2(960f, 1180f);
+                for (int i = 0; i < 3; i++)
+                {
+                    _uwRows[i].Root.anchorMin = new Vector2(0.5f, 1f);
+                    _uwRows[i].Root.anchorMax = new Vector2(0.5f, 1f);
+                    _uwRows[i].Root.pivot = new Vector2(0.5f, 1f);
+                    _uwRows[i].Root.anchoredPosition = new Vector2(0f, -156f - i * 280f);
+                    _uwRows[i].Root.sizeDelta = new Vector2(880f, 252f);
+                    _uwRows[i].IconRect.anchorMin = new Vector2(0f, 0.5f);
+                    _uwRows[i].IconRect.anchorMax = new Vector2(0f, 0.5f);
+                    _uwRows[i].IconRect.pivot = new Vector2(0f, 0.5f);
+                    _uwRows[i].IconRect.anchoredPosition = new Vector2(24f, 0f);
+                    _uwRows[i].IconRect.sizeDelta = new Vector2(114f, 114f);
+                    _uwRows[i].Title.alignment = TextAlignmentOptions.Left;
+                    _uwRows[i].Title.rectTransform.offsetMin = new Vector2(160f, -70f);
+                    _uwRows[i].Title.rectTransform.offsetMax = new Vector2(-24f, -18f);
+                    _uwRows[i].Desc.alignment = TextAlignmentOptions.Left;
+                    _uwRows[i].Desc.rectTransform.offsetMin = new Vector2(160f, 84f);
+                    _uwRows[i].Desc.rectTransform.offsetMax = new Vector2(-26f, -72f);
+                    _uwRows[i].PickRect.anchorMin = new Vector2(1f, 0f);
+                    _uwRows[i].PickRect.anchorMax = new Vector2(1f, 0f);
+                    _uwRows[i].PickRect.pivot = new Vector2(1f, 0f);
+                    _uwRows[i].PickRect.anchoredPosition = new Vector2(-22f, 18f);
+                    _uwRows[i].PickRect.sizeDelta = new Vector2(280f, 64f);
+                }
+
+                _summaryWinRect.sizeDelta = new Vector2(920f, 880f);
+                _summaryStatsBoxRect.sizeDelta = new Vector2(820f, 420f);
+            }
+            else
+            {
+                // --- LANDSCAPE 1920x1080 PC WEBGL LAYOUT ---
+                _hpRingRoot.sizeDelta = new Vector2(216f, 216f);
+                _hpPlateRect.anchoredPosition = new Vector2(0f, -128f);
+                _hpPlateRect.sizeDelta = new Vector2(292f, 54f);
+
+                // Compact Centered Top Telemetry Bar (max-width: 1320px, height: 112px)
+                _topPanelRect.anchoredPosition = new Vector2(0f, -8f);
+                _topPanelRect.sizeDelta = new Vector2(1320f, 112f);
+
+                _tierPillRect.anchoredPosition = new Vector2(14f, -10f);
+                _tierPillRect.sizeDelta = new Vector2(104f, 44f);
+                _tierBadgeTmp.fontSize = 19f;
+
+                _waveBoxRect.anchoredPosition = new Vector2(126f, -10f);
+                _waveBoxRect.sizeDelta = new Vector2(292f, 44f);
+                _waveTitleTmp.enableAutoSizing = true;
+                _waveTitleTmp.fontSizeMin = 13.5f;
+                _waveTitleTmp.fontSizeMax = 19.5f;
+                _waveSubTmp.fontSize = 15.5f;
+
+                _telemetryStripRect.anchoredPosition = new Vector2(426f, -10f);
+                _telemetryStripRect.sizeDelta = new Vector2(454f, 44f);
+                _telemetryTmp.enableAutoSizing = true;
+                _telemetryTmp.fontSizeMin = 12.5f;
+                _telemetryTmp.fontSizeMax = 16.5f;
+
+                _speedBtnRect.anchoredPosition = new Vector2(888f, -10f);
+                _speedBtnRect.sizeDelta = new Vector2(128f, 44f);
+                _speedLabelTmp.fontSize = 19f;
+
+                _muteBtnRect.anchoredPosition = new Vector2(1024f, -10f);
+                _muteBtnRect.sizeDelta = new Vector2(138f, 44f);
+                _muteLabelTmp.fontSize = 16f;
+
+                _retreatBtnRect.anchoredPosition = new Vector2(1170f, -10f);
+                _retreatBtnRect.sizeDelta = new Vector2(136f, 44f);
+                _retreatLabelTmp.fontSize = 18f;
+
+                // Row 2 of Compact Top Bar: 5 Currency Pills across 1292px
+                for (int i = 0; i < 5; i++)
+                {
+                    float w = 250f;
+                    float x = 14f + i * 260.5f;
+                    _curPills[i].Rect.anchoredPosition = new Vector2(x, -60f);
+                    _curPills[i].Rect.sizeDelta = new Vector2(w, 42f);
+                    _curPills[i].IconRect.sizeDelta = new Vector2(32f, 32f);
+                    _curPills[i].ValueTmp.fontSize = 19f;
+                    _curPills[i].ValueTmp.rectTransform.offsetMin = new Vector2(48f, 2f);
+                }
+
+                _synergyRect.anchoredPosition = new Vector2(0f, -126f);
+                _synergyRect.sizeDelta = new Vector2(780f, 42f);
+                _toastTargetY = -174f;
+                _toastRect.anchoredPosition = new Vector2(0f, _toastTargetY);
+                _toastRect.sizeDelta = new Vector2(840f, 48f);
+
+                // Compact Bottom ~27% Combat Deck (max-width: 1420px, height: 292px => 27.0% of 1080px!)
+                _deckRect.anchoredPosition = new Vector2(0f, 8f);
+                _deckRect.sizeDelta = new Vector2(1420f, 292f);
+
+                _deckHeaderRect.anchoredPosition = new Vector2(0f, 250f);
+                _deckHeaderRect.sizeDelta = new Vector2(1394f, 34f);
+                _deckTitleTmp.fontSize = 17f;
+                _coreGradeTmp.fontSize = 16f;
+                _uwQuickRect.sizeDelta = new Vector2(248f, 30f);
+
+                // Left Command Rail inside 1420x292 Deck (3 Tabs + [Q] Multiplier)
+                ConfigureLandscapeRailTab(_tabAttackRect, _tabAttackIconRect, _tabAttackLbl, 186f, "[1] АТАКА");
+                ConfigureLandscapeRailTab(_tabDefenseRect, _tabDefenseIconRect, _tabDefenseLbl, 126f, "[2] ЗАЩИТА");
+                ConfigureLandscapeRailTab(_tabUtilityRect, _tabUtilityIconRect, _tabUtilityLbl, 66f, "[3] УТИЛИТИ");
+
+                _multBtnRect.anchorMin = new Vector2(0f, 0f);
+                _multBtnRect.anchorMax = new Vector2(0f, 0f);
+                _multBtnRect.pivot = new Vector2(0f, 0f);
+                _multBtnRect.anchoredPosition = new Vector2(14f, 10f);
+                _multBtnRect.sizeDelta = new Vector2(208f, 48f);
+                _multLabelTmp.fontSize = 18f;
+
+                // Modals (Landscape 1920x1080: 3 horizontal UW columns so it fits cleanly inside 1080px height!)
+                _uwModalWinRect.sizeDelta = new Vector2(1280f, 700f);
+                for (int i = 0; i < 3; i++)
+                {
+                    float cx = (i - 1) * 408f;
+                    _uwRows[i].Root.anchorMin = new Vector2(0.5f, 1f);
+                    _uwRows[i].Root.anchorMax = new Vector2(0.5f, 1f);
+                    _uwRows[i].Root.pivot = new Vector2(0.5f, 1f);
+                    _uwRows[i].Root.anchoredPosition = new Vector2(cx, -138f);
+                    _uwRows[i].Root.sizeDelta = new Vector2(390f, 444f);
+                    _uwRows[i].IconRect.anchorMin = new Vector2(0.5f, 1f);
+                    _uwRows[i].IconRect.anchorMax = new Vector2(0.5f, 1f);
+                    _uwRows[i].IconRect.pivot = new Vector2(0.5f, 1f);
+                    _uwRows[i].IconRect.anchoredPosition = new Vector2(0f, -20f);
+                    _uwRows[i].IconRect.sizeDelta = new Vector2(104f, 104f);
+                    _uwRows[i].Title.alignment = TextAlignmentOptions.Center;
+                    _uwRows[i].Title.rectTransform.offsetMin = new Vector2(16f, -184f);
+                    _uwRows[i].Title.rectTransform.offsetMax = new Vector2(-16f, -134f);
+                    _uwRows[i].Desc.alignment = TextAlignmentOptions.Center;
+                    _uwRows[i].Desc.rectTransform.offsetMin = new Vector2(20f, 98f);
+                    _uwRows[i].Desc.rectTransform.offsetMax = new Vector2(-20f, -190f);
+                    _uwRows[i].PickRect.anchorMin = new Vector2(0.5f, 0f);
+                    _uwRows[i].PickRect.anchorMax = new Vector2(0.5f, 0f);
+                    _uwRows[i].PickRect.pivot = new Vector2(0.5f, 0f);
+                    _uwRows[i].PickRect.anchoredPosition = new Vector2(0f, 18f);
+                    _uwRows[i].PickRect.sizeDelta = new Vector2(340f, 64f);
+                }
+
+                _summaryWinRect.sizeDelta = new Vector2(900f, 680f);
+                _summaryStatsBoxRect.sizeDelta = new Vector2(800f, 320f);
+            }
+
+            LayoutStatCardsForCurrentMode(_visibleCardCount > 0 ? _visibleCardCount : 7);
+        }
+
+        private static void ConfigurePortraitTab(RectTransform tabRt, RectTransform iconRt, TextMeshProUGUI lbl, float centerX, string text)
+        {
+            tabRt.anchorMin = new Vector2(0.5f, 0f);
+            tabRt.anchorMax = new Vector2(0.5f, 0f);
+            tabRt.pivot = new Vector2(0.5f, 0f);
+            tabRt.anchoredPosition = new Vector2(centerX, 32f);
+            tabRt.sizeDelta = new Vector2(250f, 140f);
+
+            iconRt.anchorMin = new Vector2(0.5f, 1f);
+            iconRt.anchorMax = new Vector2(0.5f, 1f);
+            iconRt.pivot = new Vector2(0.5f, 1f);
+            iconRt.anchoredPosition = new Vector2(0f, -12f);
+            iconRt.sizeDelta = new Vector2(56f, 56f);
+
+            lbl.text = text;
+            lbl.fontSize = 22f;
+            lbl.alignment = TextAlignmentOptions.Bottom;
+            lbl.rectTransform.offsetMin = new Vector2(8f, 22f);
+            lbl.rectTransform.offsetMax = new Vector2(-8f, -64f);
+        }
+
+        private static void ConfigureLandscapeRailTab(RectTransform tabRt, RectTransform iconRt, TextMeshProUGUI lbl, float bottomY, string text)
+        {
+            tabRt.anchorMin = new Vector2(0f, 0f);
+            tabRt.anchorMax = new Vector2(0f, 0f);
+            tabRt.pivot = new Vector2(0f, 0f);
+            tabRt.anchoredPosition = new Vector2(14f, bottomY);
+            tabRt.sizeDelta = new Vector2(208f, 54f);
+
+            iconRt.anchorMin = new Vector2(0f, 0.5f);
+            iconRt.anchorMax = new Vector2(0f, 0.5f);
+            iconRt.pivot = new Vector2(0f, 0.5f);
+            iconRt.anchoredPosition = new Vector2(10f, 0f);
+            iconRt.sizeDelta = new Vector2(36f, 36f);
+
+            lbl.text = text;
+            lbl.fontSize = 18f;
+            lbl.alignment = TextAlignmentOptions.Left;
+            lbl.rectTransform.offsetMin = new Vector2(54f, 4f);
+            lbl.rectTransform.offsetMax = new Vector2(-8f, -4f);
+        }
+
+        private void LayoutStatCardsForCurrentMode(int activeCount)
+        {
+            int cols = !_isLandscape ? 2 : (activeCount > 8 ? 5 : 4);
+            if (cols == _lastCardLayoutCols) return;
+            _lastCardLayoutCols = cols;
+
+            if (!_isLandscape)
+            {
+                for (int i = 0; i < MaxDeckCards; i++)
+                {
+                    int col = i % 2;
+                    int row = i / 2;
+                    float cx = col == 0 ? -264f : 264f;
+                    float cy = 838f - row * 142f;
+
+                    ref StatCardWidget w = ref _cards[i];
+                    w.Root.anchorMin = new Vector2(0.5f, 0f);
+                    w.Root.anchorMax = new Vector2(0.5f, 0f);
+                    w.Root.pivot = new Vector2(0.5f, 0.5f);
+                    w.Root.anchoredPosition = new Vector2(cx, cy);
+                    w.Root.sizeDelta = new Vector2(512f, 134f);
+
+                    w.IconRect.anchoredPosition = new Vector2(14f, -14f);
+                    w.IconRect.sizeDelta = new Vector2(58f, 58f);
+
+                    w.Title.enableAutoSizing = false;
+                    w.Title.fontSize = 22f;
+                    w.Title.rectTransform.offsetMin = new Vector2(84f, -52f);
+                    w.Title.rectTransform.offsetMax = new Vector2(-14f, -10f);
+
+                    w.LevelBadge.fontSize = 18f;
+                    w.LevelBadge.alignment = TextAlignmentOptions.Center;
+                    w.LevelBadge.rectTransform.anchorMin = new Vector2(0f, 0f);
+                    w.LevelBadge.rectTransform.anchorMax = new Vector2(0f, 0f);
+                    w.LevelBadge.rectTransform.pivot = new Vector2(0f, 0f);
+                    w.LevelBadge.rectTransform.anchoredPosition = new Vector2(10f, 12f);
+                    w.LevelBadge.rectTransform.sizeDelta = new Vector2(72f, 34f);
+
+                    w.ValueTransition.fontSize = 20f;
+                    w.ValueTransition.rectTransform.offsetMin = new Vector2(84f, 14f);
+                    w.ValueTransition.rectTransform.offsetMax = new Vector2(-204f, 68f);
+
+                    w.BuyRect.anchorMin = new Vector2(1f, 0f);
+                    w.BuyRect.anchorMax = new Vector2(1f, 0f);
+                    w.BuyRect.pivot = new Vector2(1f, 0f);
+                    w.BuyRect.anchoredPosition = new Vector2(-12f, 12f);
+                    w.BuyRect.sizeDelta = new Vector2(184f, 64f);
+                    w.BuyLabel.fontSize = 22f;
+                }
+            }
+            else
+            {
+                // Landscape 4x2 (286x112) or 5x2 (226x112) inside right 1172x232 matrix of 1420x292 deck
+                float cardW = cols == 5 ? 226f : 286f;
+                float stepX = cols == 5 ? 236f : 296f;
+                const float cardH = 112f;
+
+                for (int i = 0; i < MaxDeckCards; i++)
+                {
+                    int col = i % cols;
+                    int row = i / cols;
+                    float xLeft = 234f + col * stepX;
+                    float yBot = row == 0 ? 128f : 10f;
+
+                    ref StatCardWidget w = ref _cards[i];
+                    w.Root.anchorMin = new Vector2(0f, 0f);
+                    w.Root.anchorMax = new Vector2(0f, 0f);
+                    w.Root.pivot = new Vector2(0f, 0f);
+                    w.Root.anchoredPosition = new Vector2(xLeft, yBot);
+                    w.Root.sizeDelta = new Vector2(cardW, cardH);
+
+                    w.IconRect.anchoredPosition = new Vector2(8f, -8f);
+                    w.IconRect.sizeDelta = new Vector2(36f, 36f);
+
+                    w.Title.enableAutoSizing = true;
+                    w.Title.fontSizeMin = 12f;
+                    w.Title.fontSizeMax = cols == 5 ? 15f : 17f;
+                    w.Title.rectTransform.offsetMin = new Vector2(48f, -34f);
+                    w.Title.rectTransform.offsetMax = new Vector2(-54f, -6f);
+
+                    w.LevelBadge.fontSize = 14f;
+                    w.LevelBadge.alignment = TextAlignmentOptions.Right;
+                    w.LevelBadge.rectTransform.anchorMin = new Vector2(1f, 1f);
+                    w.LevelBadge.rectTransform.anchorMax = new Vector2(1f, 1f);
+                    w.LevelBadge.rectTransform.pivot = new Vector2(1f, 1f);
+                    w.LevelBadge.rectTransform.anchoredPosition = new Vector2(-8f, -8f);
+                    w.LevelBadge.rectTransform.sizeDelta = new Vector2(60f, 24f);
+
+                    w.ValueTransition.fontSize = cols == 5 ? 14.5f : 16f;
+                    w.ValueTransition.rectTransform.offsetMin = new Vector2(10f, 46f);
+                    w.ValueTransition.rectTransform.offsetMax = new Vector2(-10f, 76f);
+
+                    w.BuyRect.anchorMin = new Vector2(0.5f, 0f);
+                    w.BuyRect.anchorMax = new Vector2(0.5f, 0f);
+                    w.BuyRect.pivot = new Vector2(0.5f, 0f);
+                    w.BuyRect.anchoredPosition = new Vector2(0f, 6f);
+                    w.BuyRect.sizeDelta = new Vector2(cardW - 16f, 36f);
+                    w.BuyLabel.fontSize = 16.5f;
+                }
+            }
         }
 
         public void OpenSummaryForLastRun(GameSession session)
@@ -219,6 +658,7 @@ namespace Crusher.UI
             if (session == null || _summaryModalRoot == null) return;
             _boundSession = session;
             _summaryOpen = true;
+            if (_arenaOverlay != null) _arenaOverlay.gameObject.SetActive(false);
             _combatLayer.gameObject.SetActive(true);
             _summaryModalRoot.gameObject.SetActive(true);
             _tweens.FadeCanvasGroup(_summaryModalGroup, 0f, 1f, 0.20f);
@@ -293,9 +733,11 @@ namespace Crusher.UI
             _boundSession = session;
             CombatSim sim = session.Combat;
 
+            RefreshMuteVisual(force: false);
+
             if (_summaryOpen)
             {
-                AnimateFtueBob(_sumFtueArrowRect, -128f);
+                AnimateFtueBob(_sumFtueArrowRect, 166f);
                 return;
             }
 
@@ -350,11 +792,19 @@ namespace Crusher.UI
                 _speedLabelTmp.text = _sb.ToString();
             }
 
-            UiFormat.SetCompactDouble(_cashTmp, "$", session.RunCash, ref _cachedCash);
-            UiFormat.SetCompactDouble(_coinsTmp, "", session.Coins, ref _cachedCoins);
-            UiFormat.SetInt(_gemsTmp, "", session.Gems, ref _cachedGems);
-            UiFormat.SetInt(_stonesTmp, "", session.Stones, ref _cachedStones);
-            UiFormat.SetInt(_cellsTmp, "", session.EliteCells, ref _cachedCells);
+            // Live DPS • RPM • KILLS telemetry (zero-alloc SetCharArray)
+            ref readonly ComputedTowerStats st = ref sim.Stats;
+            double critMult = 1.0 + st.CritChance * Math.Max(0.0, st.CritFactor - 1.0);
+            double multiMult = 1.0 + st.MultishotChance * Math.Max(0, st.MultishotTargets - 1);
+            double liveDps = st.Damage * st.AttackSpeed * critMult * multiMult;
+            int liveRpm = Mathf.RoundToInt((72f + st.OrbAngularSpeedRad * 38f) * session.EffectiveTimeScale * (sim.GoldenTower.Active ? 1.35f : 1.0f));
+            UiFormat.SetCombatTelemetry(_telemetryTmp, liveDps, liveRpm, sim.RunTotalKills, ref _cachedTelemetryKey);
+
+            UiFormat.SetCompactDouble(_curPills[0].ValueTmp, "$", session.RunCash, ref _cachedCash);
+            UiFormat.SetCompactDouble(_curPills[1].ValueTmp, "", session.Coins, ref _cachedCoins);
+            UiFormat.SetInt(_curPills[2].ValueTmp, "", session.Gems, ref _cachedGems);
+            UiFormat.SetInt(_curPills[3].ValueTmp, "", session.Stones, ref _cachedStones);
+            UiFormat.SetInt(_curPills[4].ValueTmp, "", session.EliteCells, ref _cachedCells);
 
             // 2. Synergy / UW Banner
             TickSynergyBanner(session, sim);
@@ -362,7 +812,7 @@ namespace Crusher.UI
             // 3. Toasts & Run 1 W3 FTUE Prototype Thorns Banner
             TickToasts(session, sim, unscaledDt);
 
-            // 4. Diegetic Core HP + Regen Ring
+            // 4. Diegetic Core HP + Regen Ring (concentric in FullScreenArenaOverlay!)
             TickCoreHpRing(sim, unscaledDt);
 
             // 5. Pooled <=6 Damage Numbers
@@ -375,13 +825,41 @@ namespace Crusher.UI
             TickDeck(session, sim);
         }
 
+        // --- Keyboard Hotkey Entry Points ---
+
+        public void SelectCombatTabByIndex(int index)
+        {
+            if (index == 0) SelectTab(StatTab.Attack);
+            else if (index == 1) SelectTab(StatTab.Defense);
+            else if (index == 2) SelectTab(StatTab.Utility);
+        }
+
+        public void TriggerCycleMultiplier() => OnClickCycleMultiplier();
+        public void TriggerCycleSpeed() => OnClickSpeedToggle();
+        public void TriggerRetreatToHangar() => OnClickRetreatToHangar();
+
+        public void RefreshMuteVisual(bool force)
+        {
+            if (_muteBtnBg == null || _muteLabelTmp == null) return;
+            int state = UiStyle.IsMuted ? 1 : 0;
+            if (!force && state == _cachedMuteState) return;
+            _cachedMuteState = state;
+
+            bool muted = state == 1;
+            _muteBtnBg.material = muted ? _style.MatTabInactive : _style.MatPill;
+            _muteLabelTmp.color = muted ? UiStyle.TextMuted : UiStyle.TextCyan;
+            _muteLabelTmp.text = muted ? "ЗВУК ВЫКЛ" : "ЗВУК ВКЛ";
+        }
+
+        // --- UI Construction ---
+
         private void BuildArenaOverlay()
         {
-            // Diegetic Rotor HP Ring (projected onto world origin)
+            // Diegetic Rotor HP Ring inside _arenaOverlay (outside SafeAreaRoot!)
             _hpRingRoot = UiFactory.CreateRect(
-                "CoreHpRingRoot", _combatLayer,
+                "CoreHpRingRoot", _arenaOverlay,
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0f, 300f), new Vector2(264f, 264f));
+                new Vector2(0f, 180f), new Vector2(264f, 264f));
 
             UiFactory.CreateSdfImage(
                 "RadialRing", _hpRingRoot, _style.MatCoreHpRing, new Color(0.1f, 0.8f, 0.5f, 0.45f),
@@ -391,38 +869,39 @@ namespace Crusher.UI
                 "HpReadoutPlate", _hpRingRoot, _style.MatPill, new Color(0.06f, 0.09f, 0.14f, 0.90f),
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 new Vector2(0f, -152f), new Vector2(316f, 64f), raycast: false);
+            _hpPlateRect = hpPlate.rectTransform;
 
             _hpNumericTmp = UiFactory.CreateTmp(
                 "HpNumeric", hpPlate.transform, _style.Font, "22 / 22  +0.2/с",
-                21f, UiStyle.TextPrimary, TextAlignmentOptions.Center,
+                20f, UiStyle.TextPrimary, TextAlignmentOptions.Center,
                 new Vector2(0f, 0.42f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(-10f, 0f));
             _hpNumericTmp.fontStyle = FontStyles.Bold;
 
             _hpArmorSubTmp = UiFactory.CreateTmp(
                 "HpArmorSub", hpPlate.transform, _style.Font, "РОТОР ШРЕДЕРА",
-                16f, UiStyle.TextCyan, TextAlignmentOptions.Center,
+                15f, UiStyle.TextCyan, TextAlignmentOptions.Center,
                 new Vector2(0f, 0f), new Vector2(1f, 0.48f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(-10f, 0f));
 
-            // <= 6 Pooled Damage Numbers
-            _dmgNumbers.Build(_combatLayer, _canvas, _style, _worldCam);
+            // <= 6 Pooled Damage Numbers inside _arenaOverlay
+            _dmgNumbers.Build(_arenaOverlay, _canvas, _style, _worldCam);
 
-            // Interactive Floating Gem Drone (+5 Gems) Button
+            // Interactive Floating Gem Drone (+5 Gems) Button inside _arenaOverlay
             _gemDroneBtn = UiFactory.CreateSdfButton(
-                "GemDroneBtn", _combatLayer, _style, _style.MatBuyCyan, new Color(0.10f, 0.55f, 0.78f, 0.96f),
-                "", 21f, UiStyle.TextPrimary,
+                "GemDroneBtn", _arenaOverlay, _style, _style.MatBuyCyan, new Color(0.10f, 0.55f, 0.78f, 0.96f),
+                "", 20f, UiStyle.TextPrimary,
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(280f, 480f), new Vector2(226f, 78f),
+                new Vector2(240f, 260f), new Vector2(218f, 74f),
                 OnClickGemDrone, out _, out TextMeshProUGUI droneLbl);
 
             _gemDroneBtnRect = _gemDroneBtn.GetComponent<RectTransform>();
             UiFactory.CreateIcon(
                 "DroneIcon", _gemDroneBtnRect, _style.GetIcon(UiIcons.BotGemDrone),
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(12f, 0f), new Vector2(54f, 54f));
+                new Vector2(12f, 0f), new Vector2(50f, 50f));
 
-            droneLbl.rectTransform.offsetMin = new Vector2(68f, 4f);
+            droneLbl.rectTransform.offsetMin = new Vector2(66f, 4f);
             droneLbl.rectTransform.offsetMax = new Vector2(-10f, -4f);
             droneLbl.alignment = TextAlignmentOptions.Left;
             droneLbl.fontStyle = FontStyles.Bold;
@@ -435,73 +914,103 @@ namespace Crusher.UI
             Image topPanel = UiFactory.CreateSdfImage(
                 "TopTelemetryBar", _combatLayer, _style.MatTopHud, new Color(0.09f, 0.12f, 0.17f, 0.95f),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -14f), new Vector2(1044f, 198f), raycast: false);
+                new Vector2(0f, -14f), new Vector2(1044f, 226f), raycast: false);
+            _topPanelRect = topPanel.rectTransform;
 
             Transform top = topPanel.transform;
 
-            // Row 1: Tier Pill + Wave Progress Bar + Speed Toggle + Hangar/Retreat Button
             Image tierPill = UiFactory.CreateSdfImage(
                 "TierBadge", top, _style.MatPill, new Color(0.12f, 0.18f, 0.26f, 0.95f),
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(18f, -16f), new Vector2(138f, 78f));
+                new Vector2(16f, -14f), new Vector2(124f, 70f));
+            _tierPillRect = tierPill.rectTransform;
 
             _tierBadgeTmp = UiFactory.CreateTmp(
                 "TierText", tierPill.transform, _style.Font, "ТИР 1",
-                25f, UiStyle.TextCyan, TextAlignmentOptions.Center,
+                23f, UiStyle.TextCyan, TextAlignmentOptions.Center,
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
             _tierBadgeTmp.fontStyle = FontStyles.Bold;
 
             Image waveBox = UiFactory.CreateSdfImage(
                 "WaveProgressBox", top, _style.MatWaveBar, new Color(0.11f, 0.16f, 0.24f, 0.96f),
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(168f, -16f), new Vector2(468f, 78f));
+                new Vector2(150f, -14f), new Vector2(382f, 70f));
+            _waveBoxRect = waveBox.rectTransform;
 
             _waveTitleTmp = UiFactory.CreateTmp(
                 "WaveTitle", waveBox.transform, _style.Font, "ВОЛНА 1",
-                26f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
-                new Vector2(0f, 0.35f), new Vector2(0.68f, 1f), new Vector2(0.5f, 0.5f),
-                new Vector2(10f, 2f), new Vector2(-16f, 0f));
+                23f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
+                new Vector2(0f, 0.22f), new Vector2(0.73f, 1f), new Vector2(0.5f, 0.5f),
+                new Vector2(10f, 0f), new Vector2(-12f, 0f));
             _waveTitleTmp.fontStyle = FontStyles.Bold;
 
             _waveSubTmp = UiFactory.CreateTmp(
                 "WaveSub", waveBox.transform, _style.Font, "БОЙ 26с",
-                20f, UiStyle.TextSecondary, TextAlignmentOptions.Right,
-                new Vector2(0.60f, 0.35f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
-                new Vector2(-10f, 2f), new Vector2(-16f, 0f));
+                17.5f, UiStyle.TextSecondary, TextAlignmentOptions.Right,
+                new Vector2(0.68f, 0.22f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
+                new Vector2(-10f, 0f), new Vector2(-12f, 0f));
+
+            // Live DPS • RPM • KILLS Industrial Telemetry Strip
+            Image telStrip = UiFactory.CreateSdfImage(
+                "LiveTelemetryStrip", top, _style.MatHeaderStrip, new Color(0.09f, 0.13f, 0.19f, 0.95f),
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(16f, -92f), new Vector2(1012f, 44f));
+            _telemetryStripRect = telStrip.rectTransform;
+
+            _telemetryTmp = UiFactory.CreateTmp(
+                "TelemetryVal", _telemetryStripRect, _style.Font, "⚡ DPS 4.1  •  ОБОРОТЫ 140 RPM  •  УБИТО 0",
+                19f, UiStyle.TextCyan, TextAlignmentOptions.Center,
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(-18f, -2f));
+            _telemetryTmp.fontStyle = FontStyles.Bold;
 
             _speedBtn = UiFactory.CreateSdfButton(
                 "SpeedBtn", top, _style, _style.MatBuyCyan, new Color(0.12f, 0.45f, 0.65f, 0.96f),
-                "×1.0", 26f, UiStyle.TextPrimary,
+                "×1.0", 24f, UiStyle.TextPrimary,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(650f, -16f), new Vector2(168f, 78f),
+                new Vector2(542f, -14f), new Vector2(138f, 70f),
                 OnClickSpeedToggle, out _, out _speedLabelTmp);
             _speedLabelTmp.fontStyle = FontStyles.Bold;
             _speedBtnRect = _speedBtn.GetComponent<RectTransform>();
 
+            _muteBtn = UiFactory.CreateSdfButton(
+                "MuteBtn", top, _style, _style.MatPill, new Color(0.11f, 0.16f, 0.22f, 0.96f),
+                "ЗВУК ВКЛ", 18f, UiStyle.TextCyan,
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(690f, -14f), new Vector2(146f, 70f),
+                () =>
+                {
+                    UiStyle.ToggleMute();
+                    RefreshMuteVisual(force: true);
+                    _tweens.PunchScale(_muteBtnRect, 0.08f, 0.14f);
+                }, out _muteBtnBg, out _muteLabelTmp);
+            _muteLabelTmp.fontStyle = FontStyles.Bold;
+            _muteBtnRect = _muteBtn.GetComponent<RectTransform>();
+
             _retreatBtn = UiFactory.CreateSdfButton(
                 "HangarRetreatBtn", top, _style, _style.MatDangerBtn, new Color(0.45f, 0.15f, 0.15f, 0.96f),
-                "АНГАР", 23f, UiStyle.TextPrimary,
+                "АНГАР", 22f, UiStyle.TextPrimary,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(830f, -16f), new Vector2(196f, 78f),
-                OnClickRetreatToHangar, out _, out TextMeshProUGUI retLbl);
-            retLbl.fontStyle = FontStyles.Bold;
+                new Vector2(846f, -14f), new Vector2(182f, 70f),
+                OnClickRetreatToHangar, out _, out _retreatLabelTmp);
+            _retreatLabelTmp.fontStyle = FontStyles.Bold;
+            _retreatBtnRect = _retreatBtn.GetComponent<RectTransform>();
 
-            // Row 2: 5 Currency Pills ($ Cash, Coins, Gems, Stones, Cells)
-            _cashTmp = BuildCurrencyPill(top, 18f, 224f, UiIcons.Cash, "$55", UiStyle.TextEmerald);
-            _coinsTmp = BuildCurrencyPill(top, 252f, 212f, UiIcons.Coins, "0", UiStyle.TextAmber);
-            _gemsTmp = BuildCurrencyPill(top, 474f, 182f, UiIcons.Gems, "0", UiStyle.TextCyan);
-            _stonesTmp = BuildCurrencyPill(top, 666f, 176f, UiIcons.Stones, "0", new Color(0.45f, 0.98f, 0.72f, 1f));
-            _cellsTmp = BuildCurrencyPill(top, 852f, 174f, UiIcons.Cells, "0", new Color(0.84f, 0.62f, 1.00f, 1f));
+            // 5 Currency Pills ($ Cash, Coins, Gems, Stones, Cells)
+            _curPills[0] = BuildCurrencyPill(top, 16f, 222f, UiIcons.Cash, "$35", UiStyle.TextEmerald);
+            _curPills[1] = BuildCurrencyPill(top, 248f, 210f, UiIcons.Coins, "0", UiStyle.TextAmber);
+            _curPills[2] = BuildCurrencyPill(top, 468f, 182f, UiIcons.Gems, "0", UiStyle.TextCyan);
+            _curPills[3] = BuildCurrencyPill(top, 660f, 176f, UiIcons.Stones, "0", new Color(0.45f, 0.98f, 0.72f, 1f));
+            _curPills[4] = BuildCurrencyPill(top, 846f, 182f, UiIcons.Cells, "0", new Color(0.84f, 0.62f, 1.00f, 1f));
 
-            // Active UW / Synergy Overdrive Strip below Top HUD
+            // Active UW / Synergy Overdrive Strip
             Image synImg = UiFactory.CreateSdfImage(
                 "SynergyBanner", _combatLayer, _style.MatSynergyBanner, new Color(0.28f, 0.18f, 0.04f, 0.95f),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -220f), new Vector2(860f, 56f), raycast: false);
+                new Vector2(0f, -248f), new Vector2(880f, 54f), raycast: false);
             _synergyRect = synImg.rectTransform;
             _synergyTmp = UiFactory.CreateTmp(
                 "SynergyText", _synergyRect, _style.Font, "",
-                21f, UiStyle.TextAmber, TextAlignmentOptions.Center,
+                20f, UiStyle.TextAmber, TextAlignmentOptions.Center,
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(-24f, -4f));
             _synergyTmp.fontStyle = FontStyles.Bold;
             _synergyRect.gameObject.SetActive(false);
@@ -510,97 +1019,99 @@ namespace Crusher.UI
             Image toastImg = UiFactory.CreateSdfImage(
                 "ToastBanner", _combatLayer, _style.MatToastBanner, new Color(0.22f, 0.16f, 0.06f, 0.96f),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -284f), new Vector2(940f, 70f), raycast: false);
+                new Vector2(0f, -310f), new Vector2(940f, 68f), raycast: false);
             _toastRect = toastImg.rectTransform;
             _toastGroup = toastImg.gameObject.AddComponent<CanvasGroup>();
             _toastTmp = UiFactory.CreateTmp(
                 "ToastText", _toastRect, _style.Font, "",
-                22f, UiStyle.TextAmber, TextAlignmentOptions.Center,
+                21f, UiStyle.TextAmber, TextAlignmentOptions.Center,
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(-26f, -6f));
             _toastTmp.fontStyle = FontStyles.Bold;
             _toastRect.gameObject.SetActive(false);
         }
 
-        private TextMeshProUGUI BuildCurrencyPill(Transform parent, float xLeft, float width, string iconId, string initText, Color textCol)
+        private CurrencyPillRefs BuildCurrencyPill(Transform parent, float xLeft, float width, string iconId, string initText, Color textCol)
         {
             Image pill = UiFactory.CreateSdfImage(
                 "Cur_" + iconId, parent, _style.MatPill, new Color(0.11f, 0.14f, 0.20f, 0.95f),
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(xLeft, -108f), new Vector2(width, 72f));
+                new Vector2(xLeft, -144f), new Vector2(width, 68f));
 
-            UiFactory.CreateIcon(
+            Image ic = UiFactory.CreateIcon(
                 "Icon", pill.transform, _style.GetIcon(iconId),
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(10f, 0f), new Vector2(46f, 46f));
+                new Vector2(10f, 0f), new Vector2(44f, 44f));
 
             TextMeshProUGUI tmp = UiFactory.CreateTmp(
                 "Val", pill.transform, _style.Font, initText,
-                23f, textCol, TextAlignmentOptions.Left,
+                22f, textCol, TextAlignmentOptions.Left,
                 new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, Vector2.zero);
-            tmp.rectTransform.offsetMin = new Vector2(62f, 4f);
+            tmp.rectTransform.offsetMin = new Vector2(58f, 4f);
             tmp.rectTransform.offsetMax = new Vector2(-10f, -4f);
             tmp.fontStyle = FontStyles.Bold;
-            return tmp;
+
+            return new CurrencyPillRefs
+            {
+                Rect = pill.rectTransform,
+                IconRect = ic.rectTransform,
+                ValueTmp = tmp
+            };
         }
 
         private void BuildBottomDeck()
         {
-            // ~41.8% of 2400px = 1004px, leaving upper 58.2% clean for 3D Arena
             Image deckBg = UiFactory.CreateSdfImage(
                 "BottomUpgradeDeck", _combatLayer, _style.MatDeckBg, new Color(0.08f, 0.10f, 0.14f, 0.98f),
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 Vector2.zero, new Vector2(1080f, 1004f), raycast: true);
             _deckRect = deckBg.rectTransform;
 
-            // Header Strip (y_from_bottom = 918..992)
             Image hdr = UiFactory.CreateSdfImage(
                 "DeckHeader", _deckRect, _style.MatHeaderStrip, new Color(0.13f, 0.18f, 0.25f, 0.96f),
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 new Vector2(0f, 918f), new Vector2(1040f, 72f));
+            _deckHeaderRect = hdr.rectTransform;
 
             _deckTitleTmp = UiFactory.CreateTmp(
-                "DeckTitle", hdr.transform, _style.Font, "ПАЛУБА МОДИФИКАЦИЙ • АТАКА",
-                23f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
-                new Vector2(0f, 0f), new Vector2(0.56f, 1f), new Vector2(0f, 0.5f),
-                new Vector2(20f, 0f), new Vector2(-20f, 0f));
+                "DeckTitle", hdr.transform, _style.Font, "ПАЛУБА ПРОКАЧКИ • АТАКА",
+                22f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
+                new Vector2(0f, 0f), new Vector2(0.62f, 1f), new Vector2(0f, 0.5f),
+                new Vector2(18f, 0f), new Vector2(-18f, 0f));
             _deckTitleTmp.fontStyle = FontStyles.Bold;
 
             _coreGradeTmp = UiFactory.CreateTmp(
                 "CoreGradeLabel", hdr.transform, _style.Font, "G0 РЖАВЫЙ РОТОР",
                 19f, UiStyle.TextAmber, TextAlignmentOptions.Right,
-                new Vector2(0.54f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f),
-                new Vector2(-20f, 0f), new Vector2(-20f, 0f));
+                new Vector2(0.58f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f),
+                new Vector2(-18f, 0f), new Vector2(-18f, 0f));
             _coreGradeTmp.fontStyle = FontStyles.Bold;
 
-            // Quick UW Unlock Button overlaid on right side of deck header when Stones ready
             _uwQuickBtn = UiFactory.CreateSdfButton(
                 "UwQuickBtn", hdr.transform, _style, _style.MatBuyGreen, new Color(0.14f, 0.62f, 0.36f, 0.98f),
-                "⚡ ВЫБРАТЬ УЛЬТУ!", 20f, UiStyle.TextPrimary,
+                "⚡ ВЫБРАТЬ УЛЬТУ!", 18f, UiStyle.TextPrimary,
                 new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-12f, 0f), new Vector2(280f, 58f),
+                new Vector2(-10f, 0f), new Vector2(280f, 56f),
                 OnClickUwQuick, out _, out _uwQuickLabel);
             _uwQuickLabel.fontStyle = FontStyles.Bold;
             _uwQuickRect = _uwQuickBtn.GetComponent<RectTransform>();
             _uwQuickRect.gameObject.SetActive(false);
 
-            // 10 Pre-allocated Stat Cards (2 columns x 5 rows inside y_from_bottom = 192..908)
-            // Card size: 512 x 134, col centers at x = -264 and +264, rows from top (y=838) down by 142px
             for (int i = 0; i < MaxDeckCards; i++)
             {
                 int col = i % 2;
                 int row = i / 2;
                 float cx = col == 0 ? -264f : 264f;
-                float cy = 838f - row * 142f; // rows at y = 838, 696, 554, 412, 270 (covers smoke taps ny=0.78..0.88!)
-
+                float cy = 838f - row * 142f;
                 _cards[i] = BuildStatCardSlot(i, cx, cy);
             }
 
-            // Bottom Tab & Multiplier Bar (y_from_bottom = 30..174, center y = 102 -> ny = 0.957!)
-            // Coordinates match tools/smoke_tt36p.py: Attack (0.14, 0.95), Defense (0.38, 0.95)!
-            BuildTabButton("TabAttack", -392f, 250f, UiIcons.TabAttack, "АТАКА", () => SelectTab(StatTab.Attack), out _tabAttackBg, out _);
-            BuildTabButton("TabDefense", -132f, 250f, UiIcons.TabDefense, "ЗАЩИТА", () => SelectTab(StatTab.Defense), out _tabDefenseBg, out _tabDefenseRect);
-            BuildTabButton("TabUtility", 128f, 250f, UiIcons.TabUtility, "УТИЛИТИ", () => SelectTab(StatTab.Utility), out _tabUtilityBg, out _);
+            BuildTabButton("TabAttack", -392f, 250f, UiIcons.TabAttack, "АТАКА", () => SelectTab(StatTab.Attack),
+                out _tabAttackBg, out _tabAttackRect, out _tabAttackIconRect, out _tabAttackLbl);
+            BuildTabButton("TabDefense", -132f, 250f, UiIcons.TabDefense, "ЗАЩИТА", () => SelectTab(StatTab.Defense),
+                out _tabDefenseBg, out _tabDefenseRect, out _tabDefenseIconRect, out _tabDefenseLbl);
+            BuildTabButton("TabUtility", 128f, 250f, UiIcons.TabUtility, "УТИЛИТИ", () => SelectTab(StatTab.Utility),
+                out _tabUtilityBg, out _tabUtilityRect, out _tabUtilityIconRect, out _tabUtilityLbl);
 
             _multBtn = UiFactory.CreateSdfButton(
                 "BuyMultBtn", _deckRect, _style, _style.MatBuyCyan, new Color(0.12f, 0.45f, 0.65f, 0.96f),
@@ -615,17 +1126,17 @@ namespace Crusher.UI
             Image arrowImg = UiFactory.CreateSdfImage(
                 "FtueDefenseArrow", _deckRect, _style.MatFtueArrowHud, UiStyle.TextAmber,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(-132f, 178f), new Vector2(96f, 84f), raycast: false);
+                new Vector2(-132f, 178f), new Vector2(88f, 76f), raycast: false);
             _ftueArrowRect = arrowImg.rectTransform;
 
             Image callout = UiFactory.CreateSdfImage(
                 "CalloutPlate", _ftueArrowRect, _style.MatToastBanner, new Color(0.28f, 0.18f, 0.04f, 0.98f),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 4f), new Vector2(260f, 46f), raycast: false);
+                new Vector2(0f, 4f), new Vector2(248f, 42f), raycast: false);
 
             _ftueArrowTmp = UiFactory.CreateTmp(
                 "CalloutText", callout.transform, _style.Font, "КАЧАЙТЕ ЗУБЬЯ!",
-                19f, UiStyle.TextAmber, TextAlignmentOptions.Center,
+                18f, UiStyle.TextAmber, TextAlignmentOptions.Center,
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(-10f, -2f));
             _ftueArrowTmp.fontStyle = FontStyles.Bold;
             _ftueArrowRect.gameObject.SetActive(false);
@@ -652,11 +1163,13 @@ namespace Crusher.UI
             w.CardWholeBtn.targetGraphic = w.CardBg;
             w.CardWholeBtn.transition = Selectable.Transition.None;
             w.CardWholeBtn.onClick.AddListener(() => OnClickBuyStatSlot(captured));
+            UiFactory.AttachHover(w.Root, 1.025f, 0.975f);
 
             w.Icon = UiFactory.CreateIcon(
                 "Icon", w.Root, null,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
                 new Vector2(14f, -14f), new Vector2(58f, 58f));
+            w.IconRect = w.Icon.rectTransform;
 
             w.LevelBadge = UiFactory.CreateTmp(
                 "LvBadge", w.Root, _style.Font, "Ур. 0",
@@ -687,6 +1200,7 @@ namespace Crusher.UI
                 new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
                 new Vector2(-12f, 12f), new Vector2(184f, 64f),
                 () => OnClickBuyStatSlot(captured), out w.BuyBg, out w.BuyLabel);
+            w.BuyRect = w.BuyBtn.GetComponent<RectTransform>();
             w.BuyLabel.fontStyle = FontStyles.Bold;
 
             return w;
@@ -694,25 +1208,26 @@ namespace Crusher.UI
 
         private void BuildTabButton(
             string name, float centerX, float width, string iconId, string title,
-            UnityEngine.Events.UnityAction onClick, out Image bgOut, out RectTransform rectOut)
+            UnityAction onClick, out Image bgOut, out RectTransform rectOut, out RectTransform iconRectOut, out TextMeshProUGUI lblOut)
         {
             Button btn = UiFactory.CreateSdfButton(
                 name, _deckRect, _style, _style.MatTabInactive, new Color(0.12f, 0.16f, 0.22f, 0.96f),
                 title, 22f, UiStyle.TextPrimary,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 new Vector2(centerX, 32f), new Vector2(width, 140f),
-                onClick, out bgOut, out TextMeshProUGUI lbl);
+                onClick, out bgOut, out lblOut);
 
             rectOut = btn.GetComponent<RectTransform>();
-            UiFactory.CreateIcon(
+            Image ic = UiFactory.CreateIcon(
                 "TabIcon", rectOut, _style.GetIcon(iconId),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, -12f), new Vector2(56f, 56f));
+            iconRectOut = ic.rectTransform;
 
-            lbl.alignment = TextAlignmentOptions.Bottom;
-            lbl.rectTransform.offsetMin = new Vector2(8f, 16f);
-            lbl.rectTransform.offsetMax = new Vector2(-8f, -68f);
-            lbl.fontStyle = FontStyles.Bold;
+            lblOut.alignment = TextAlignmentOptions.Bottom;
+            lblOut.rectTransform.offsetMin = new Vector2(8f, 16f);
+            lblOut.rectTransform.offsetMax = new Vector2(-8f, -68f);
+            lblOut.fontStyle = FontStyles.Bold;
         }
 
         private void BuildUwChoiceModal(Transform modalParent)
@@ -727,19 +1242,20 @@ namespace Crusher.UI
                 "ModalWindow", _uwModalRoot, _style.MatModalWindow, new Color(0.11f, 0.15f, 0.22f, 0.99f),
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(960f, 1180f), raycast: true);
+            _uwModalWinRect = win.rectTransform;
 
             TextMeshProUGUI hdr = UiFactory.CreateTmp(
                 "Header", win.transform, _style.Font, "⚡ АБСОЛЮТНОЕ ОРУЖИЕ ЯДРА",
-                32f, UiStyle.TextAmber, TextAlignmentOptions.Center,
+                30f, UiStyle.TextAmber, TextAlignmentOptions.Center,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -28f), new Vector2(-40f, 52f));
+                new Vector2(0f, -24f), new Vector2(-40f, 50f));
             hdr.fontStyle = FontStyles.Bold;
 
             _uwModalSubTmp = UiFactory.CreateTmp(
                 "SubHeader", win.transform, _style.Font, "Выберите модуль абсолютного оружия:",
-                22f, UiStyle.TextSecondary, TextAlignmentOptions.Center,
+                21f, UiStyle.TextSecondary, TextAlignmentOptions.Center,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -86f), new Vector2(-40f, 40f));
+                new Vector2(0f, -78f), new Vector2(-40f, 38f));
 
             for (int i = 0; i < 3; i++)
             {
@@ -756,31 +1272,33 @@ namespace Crusher.UI
                 row.Icon = UiFactory.CreateIcon(
                     "Icon", row.Root, null,
                     new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                    new Vector2(24f, 0f), new Vector2(118f, 118f));
+                    new Vector2(24f, 0f), new Vector2(114f, 114f));
+                row.IconRect = row.Icon.rectTransform;
 
                 row.Title = UiFactory.CreateTmp(
                     "Title", row.Root, _style.Font, "Ульта",
-                    28f, UiStyle.TextAmber, TextAlignmentOptions.Left,
+                    26f, UiStyle.TextAmber, TextAlignmentOptions.Left,
                     new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
                     Vector2.zero, Vector2.zero);
-                row.Title.rectTransform.offsetMin = new Vector2(162f, -72f);
-                row.Title.rectTransform.offsetMax = new Vector2(-24f, -20f);
+                row.Title.rectTransform.offsetMin = new Vector2(160f, -70f);
+                row.Title.rectTransform.offsetMax = new Vector2(-24f, -18f);
                 row.Title.fontStyle = FontStyles.Bold;
 
                 row.Desc = UiFactory.CreateTmp(
                     "Desc", row.Root, _style.Font, "",
-                    21f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
+                    20f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
                     new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0f, 0.5f),
                     Vector2.zero, Vector2.zero, wrap: true);
-                row.Desc.rectTransform.offsetMin = new Vector2(162f, 84f);
-                row.Desc.rectTransform.offsetMax = new Vector2(-28f, -74f);
+                row.Desc.rectTransform.offsetMin = new Vector2(160f, 84f);
+                row.Desc.rectTransform.offsetMax = new Vector2(-26f, -72f);
 
                 row.PickBtn = UiFactory.CreateSdfButton(
                     "PickBtn", row.Root, _style, _style.MatBuyAmber, UiStyle.TextAmber,
-                    "ОТКРЫТЬ", 24f, UiStyle.TextButtonDark,
+                    "ОТКРЫТЬ", 23f, UiStyle.TextButtonDark,
                     new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
-                    new Vector2(-22f, 18f), new Vector2(280f, 66f),
+                    new Vector2(-22f, 18f), new Vector2(280f, 64f),
                     () => OnClickPickUw(slot), out row.PickBg, out row.PickLabel);
+                row.PickRect = row.PickBtn.GetComponent<RectTransform>();
                 row.PickLabel.fontStyle = FontStyles.Bold;
 
                 _uwRows[i] = row;
@@ -788,9 +1306,9 @@ namespace Crusher.UI
 
             UiFactory.CreateSdfButton(
                 "CloseUwModalBtn", win.transform, _style, _style.MatTabInactive, new Color(0.18f, 0.22f, 0.28f, 0.96f),
-                "ЗАКРЫТЬ", 23f, UiStyle.TextSecondary,
+                "ЗАКРЫТЬ", 22f, UiStyle.TextSecondary,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 26f), new Vector2(320f, 74f),
+                new Vector2(0f, 22f), new Vector2(320f, 68f),
                 () =>
                 {
                     UiStyle.PlaySfx(SfxId.UiTap);
@@ -812,37 +1330,38 @@ namespace Crusher.UI
                 "SummaryWindow", _summaryModalRoot, _style.MatModalWindow, new Color(0.11f, 0.15f, 0.22f, 0.99f),
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(920f, 880f), raycast: true);
+            _summaryWinRect = win.rectTransform;
 
             _sumTitleTmp = UiFactory.CreateTmp(
                 "SummaryTitle", win.transform, _style.Font, "ИТОГИ ЗАБЕГА",
-                38f, UiStyle.TextCrimson, TextAlignmentOptions.Center,
+                36f, UiStyle.TextCrimson, TextAlignmentOptions.Center,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -34f), new Vector2(-40f, 64f));
+                new Vector2(0f, -28f), new Vector2(-40f, 60f));
             _sumTitleTmp.fontStyle = FontStyles.Bold;
 
-            TextMeshProUGUI sub = UiFactory.CreateTmp(
+            UiFactory.CreateTmp(
                 "SummarySub", win.transform, _style.Font, "ОТЧЁТ БОЕВОЙ ТЕЛЕМЕТРИИ",
-                21f, UiStyle.TextSecondary, TextAlignmentOptions.Center,
+                20f, UiStyle.TextSecondary, TextAlignmentOptions.Center,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -98f), new Vector2(-40f, 36f));
+                new Vector2(0f, -88f), new Vector2(-40f, 34f));
 
             Image statsBox = UiFactory.CreateSdfImage(
                 "StatsBox", win.transform, _style.MatStatCard, new Color(0.08f, 0.11f, 0.16f, 0.96f),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -156f), new Vector2(820f, 420f));
+                new Vector2(0f, -142f), new Vector2(820f, 420f));
+            _summaryStatsBoxRect = statsBox.rectTransform;
 
             _sumStatsTmp = UiFactory.CreateTmp(
                 "SummaryStats", statsBox.transform, _style.Font, "",
-                28f, UiStyle.TextPrimary, TextAlignmentOptions.Center,
+                26f, UiStyle.TextPrimary, TextAlignmentOptions.Center,
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f),
-                Vector2.zero, new Vector2(-48f, -36f), wrap: true);
+                Vector2.zero, new Vector2(-44f, -28f), wrap: true);
 
-            // Button 1: В МАСТЕРСКУЮ (with FTUE pulsing arrow after Run 1 death)
-            Button wsBtn = UiFactory.CreateSdfButton(
+            UiFactory.CreateSdfButton(
                 "ToWorkshopBtn", win.transform, _style, _style.MatBuyAmber, UiStyle.TextAmber,
-                "В МАСТЕРСКУЮ", 26f, UiStyle.TextButtonDark,
+                "В МАСТЕРСКУЮ", 25f, UiStyle.TextButtonDark,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(-210f, 44f), new Vector2(390f, 112f),
+                new Vector2(-210f, 38f), new Vector2(390f, 102f),
                 () =>
                 {
                     UiStyle.PlaySfx(SfxId.UiTap);
@@ -855,28 +1374,28 @@ namespace Crusher.UI
             Image arrow = UiFactory.CreateSdfImage(
                 "SummaryFtueArrow", win.transform, _style.MatFtueArrowModal, UiStyle.TextAmber,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(-210f, 166f), new Vector2(96f, 84f), raycast: false);
+                new Vector2(-210f, 150f), new Vector2(90f, 78f), raycast: false);
             _sumFtueArrowRect = arrow.rectTransform;
 
             TextMeshProUGUI arrowTip = UiFactory.CreateTmp(
                 "Tip", _sumFtueArrowRect, _style.Font, "ОТКРОЙТЕ ЗУБЬЯ!",
-                20f, UiStyle.TextAmber, TextAlignmentOptions.Center,
+                19f, UiStyle.TextAmber, TextAlignmentOptions.Center,
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 2f), new Vector2(280f, 36f));
+                new Vector2(0f, 2f), new Vector2(280f, 34f));
             arrowTip.fontStyle = FontStyles.Bold;
 
-            // Button 2: НОВЫЙ ЗАБЕГ
-            Button retryBtn = UiFactory.CreateSdfButton(
+            UiFactory.CreateSdfButton(
                 "NewRunBtn", win.transform, _style, _style.MatBuyGreen, UiStyle.TextEmerald,
-                "▶ НОВЫЙ ЗАБЕГ", 26f, UiStyle.TextPrimary,
+                "▶ НОВЫЙ ЗАБЕГ", 25f, UiStyle.TextPrimary,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(210f, 44f), new Vector2(390f, 112f),
+                new Vector2(210f, 38f), new Vector2(390f, 102f),
                 () =>
                 {
                     if (_boundSession == null) return;
                     UiStyle.PlaySfx(SfxId.UiUnlock);
                     _summaryOpen = false;
                     _summaryModalRoot.gameObject.SetActive(false);
+                    if (_arenaOverlay != null) _arenaOverlay.gameObject.SetActive(true);
                     _dmgNumbers.ClearAll();
                     _boundSession.StartNewRun(_boundSession.ActiveTier);
                 }, out _, out TextMeshProUGUI retryLbl);
@@ -917,13 +1436,13 @@ namespace Crusher.UI
                 if (gtAct && bhAct)
                 {
                     _sb.Append("⚡ СИНХРОН ОВЕРДРАЙВ: GT ×")
-                       .Append(sim.GoldenTower.Multiplier.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+                       .Append(sim.GoldenTower.Multiplier.ToString("0.0", CultureInfo.InvariantCulture))
                        .Append(" + ЧЁРНАЯ ДЫРА (").Append(Mathf.Max(1, remGt)).Append("с)");
                 }
                 else if (gtAct)
                 {
                     _sb.Append("⚡ ЗОЛОТАЯ ПЛАВИЛЬНЯ АКТИВНА ×")
-                       .Append(sim.GoldenTower.Multiplier.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+                       .Append(sim.GoldenTower.Multiplier.ToString("0.0", CultureInfo.InvariantCulture))
                        .Append(" (").Append(Mathf.Max(1, remGt)).Append("с)");
                 }
                 else if (bhAct)
@@ -1012,13 +1531,14 @@ namespace Crusher.UI
             _toastTimer = duration;
             _toastGroup.alpha = 1f;
             _toastRect.gameObject.SetActive(true);
-            _tweens.SlideAnchoredY(_toastRect, -248f, -284f, 0.20f);
+            _tweens.SlideAnchoredY(_toastRect, _toastTargetY + 34f, _toastTargetY, 0.20f);
         }
 
         private void TickCoreHpRing(CombatSim sim, float unscaledDt)
         {
-            // Project 3D Rotor Core (0, 0.25, 0) onto HUD layer
-            Vector2 coreUiPos = _dmgNumbers.ProjectSimToLayer(0f, 0f, 0.25f);
+            // Project 3D Rotor Core hub (0, 0.42, 0) onto FullScreenArenaOverlay (outside SafeAreaRoot!)
+            Vector2 coreUiPos = UiScreenSpace.ProjectWorldToOverlay(
+                _worldCam, _canvas, _arenaOverlay, new Vector3(0f, 0.42f, 0f));
             _hpRingRoot.anchoredPosition = coreUiPos;
 
             float maxHp = (float)Math.Max(1.0, sim.CoreMaxHp);
@@ -1060,7 +1580,7 @@ namespace Crusher.UI
                     _sb.Append("БРОНЯ ");
                     UiFormat.AppendCompactToSb(_sb, sim.Stats.DefAbs);
                     _sb.Append(" • ДЕМПФЕР ")
-                       .Append((sim.Stats.DefPercent * 100.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))
+                       .Append((sim.Stats.DefPercent * 100.0).ToString("0.#", CultureInfo.InvariantCulture))
                        .Append('%');
                     _hpArmorSubTmp.text = _sb.ToString();
                 }
@@ -1088,10 +1608,19 @@ namespace Crusher.UI
                 _gemDroneBtnRect.gameObject.SetActive(true);
             }
 
-            Vector2 dronePos = _dmgNumbers.ProjectSimToLayer(sim.GemDrone.PosX, sim.GemDrone.PosY, 1.6f);
-            float bob = Mathf.Sin(Time.unscaledTime * 4.2f) * 7f;
-            dronePos.x = Mathf.Clamp(dronePos.x, -400f, 400f);
-            dronePos.y = Mathf.Clamp(dronePos.y + 44f + bob, 80f, 760f);
+            Vector2 dronePos = _dmgNumbers.ProjectSimToFullScreen(sim.GemDrone.PosX, sim.GemDrone.PosY, 1.5f);
+            float bob = Mathf.Sin(Time.unscaledTime * 4.2f) * 6f;
+
+            if (_isLandscape)
+            {
+                dronePos.x = Mathf.Clamp(dronePos.x, -740f, 740f);
+                dronePos.y = Mathf.Clamp(dronePos.y + 38f + bob, -160f, 360f);
+            }
+            else
+            {
+                dronePos.x = Mathf.Clamp(dronePos.x, -400f, 400f);
+                dronePos.y = Mathf.Clamp(dronePos.y + 44f + bob, -120f, 840f);
+            }
             _gemDroneBtnRect.anchoredPosition = dronePos;
         }
 
@@ -1113,8 +1642,19 @@ namespace Crusher.UI
                 _cachedHeaderGrade = gradeInt;
                 _cachedHeaderTab = _activeTab;
 
-                _deckTitleTmp.text = _activeTab == StatTab.Attack ? "ПАЛУБА ПРОКАЧКИ • АТАКА"
-                    : (_activeTab == StatTab.Defense ? "ПАЛУБА ПРОКАЧКИ • ЗАЩИТА" : "ПАЛУБА ПРОКАЧКИ • УТИЛИТИ");
+                if (_isLandscape)
+                {
+                    _deckTitleTmp.text = _activeTab == StatTab.Attack
+                        ? "ПАЛУБА • АТАКА   [1-3] Вкладки  [Q] Кратность  [Space] Скорость  [Tab] Ангар  [M] Звук"
+                        : (_activeTab == StatTab.Defense
+                            ? "ПАЛУБА • ЗАЩИТА   [1-3] Вкладки  [Q] Кратность  [Space] Скорость  [Tab] Ангар  [M] Звук"
+                            : "ПАЛУБА • УТИЛИТИ   [1-3] Вкладки  [Q] Кратность  [Space] Скорость  [Tab] Ангар  [M] Звук");
+                }
+                else
+                {
+                    _deckTitleTmp.text = _activeTab == StatTab.Attack ? "ПАЛУБА ПРОКАЧКИ • АТАКА"
+                        : (_activeTab == StatTab.Defense ? "ПАЛУБА ПРОКАЧКИ • ЗАЩИТА" : "ПАЛУБА ПРОКАЧКИ • УТИЛИТИ");
+                }
 
                 _coreGradeTmp.text = gradeInt switch
                 {
@@ -1125,7 +1665,7 @@ namespace Crusher.UI
                 };
             }
 
-            // Populate unlocked stats for _activeTab
+            // Count & populate unlocked stats for _activeTab
             int slot = 0;
             int thornsSlotIdx = -1;
             int healthSlotIdx = -1;
@@ -1138,7 +1678,6 @@ namespace Crusher.UI
                 StatId sid = def.Id;
                 bool unlocked = session.IsStatUnlocked(sid);
 
-                // In Run 1 on Defense tab, show Thorns preview card if prototype teeth triggered so novice sees where Thorns lives
                 bool showRun1ThornsPreview = !unlocked
                     && sid == StatId.Thorns
                     && _activeTab == StatTab.Defense
@@ -1154,6 +1693,8 @@ namespace Crusher.UI
             }
 
             _visibleCardCount = slot;
+            LayoutStatCardsForCurrentMode(Math.Max(1, _visibleCardCount));
+
             for (int i = slot; i < MaxDeckCards; i++)
             {
                 if (_cards[i].Root.gameObject.activeSelf)
@@ -1162,8 +1703,7 @@ namespace Crusher.UI
                 }
             }
 
-            // FTUE Pulsing Arrow Logic:
-            // Starts at Run 1 Wave 3+ (or while Thorns is unlocked at level 0) until player upgrades Defense / Thorns!
+            // FTUE Pulsing Arrow Logic
             bool thornsNeedsFirstBuy = session.IsStatUnlocked(StatId.Thorns) && session.GetTotalStatLevel(StatId.Thorns) == 0;
             bool run1W3Guide = session.TotalRunsStarted == 1 && (sim.CurrentWave >= 3 || sim.PrototypeThornsTriggered) && !_run1DefensePurchased;
             bool showFtueArrow = thornsNeedsFirstBuy || run1W3Guide;
@@ -1175,12 +1715,19 @@ namespace Crusher.UI
             }
 
             if (!_ftueArrowRect.gameObject.activeSelf) _ftueArrowRect.gameObject.SetActive(true);
-            float bobY = Mathf.Sin(Time.unscaledTime * 7.5f) * 7f;
+            float bobY = Mathf.Sin(Time.unscaledTime * 7.5f) * 6f;
 
             if (_activeTab != StatTab.Defense)
             {
                 _ftueArrowTmp.text = "ЗАЩИТА → ЗУБЬЯ!";
-                _ftueArrowRect.anchoredPosition = new Vector2(-132f, 174f + bobY);
+                if (_isLandscape)
+                {
+                    _ftueArrowRect.anchoredPosition = new Vector2(-590f, 186f + bobY);
+                }
+                else
+                {
+                    _ftueArrowRect.anchoredPosition = new Vector2(-132f, 174f + bobY);
+                }
             }
             else
             {
@@ -1189,7 +1736,15 @@ namespace Crusher.UI
                 {
                     Vector2 cardPos = _cards[targetSlot].Root.anchoredPosition;
                     _ftueArrowTmp.text = thornsSlotIdx >= 0 ? "КАЧАЙТЕ ЗУБЬЯ!" : "УКРЕПИТЕ ЯДРО!";
-                    _ftueArrowRect.anchoredPosition = new Vector2(cardPos.x + 120f, cardPos.y + 42f + bobY);
+                    if (_isLandscape)
+                    {
+                        float deckCenterX = -710f + cardPos.x + _cards[targetSlot].Root.sizeDelta.x * 0.5f;
+                        _ftueArrowRect.anchoredPosition = new Vector2(deckCenterX, cardPos.y + 108f + bobY);
+                    }
+                    else
+                    {
+                        _ftueArrowRect.anchoredPosition = new Vector2(cardPos.x + 120f, cardPos.y + 42f + bobY);
+                    }
                 }
                 else
                 {
@@ -1224,7 +1779,7 @@ namespace Crusher.UI
                     w.CachedTotalLv = -2;
                     w.CardBg.material = _style.MatCardLocked;
                     w.LevelBadge.text = "ПРОТОТИП";
-                    w.ValueTransition.text = "8% шипы • Откр. в Ангаре (W10)";
+                    w.ValueTransition.text = "8% шипы • Ангар W10";
                     w.BuyBg.material = _style.MatBuyDisabled;
                     w.BuyLabel.color = UiStyle.TextMuted;
                     w.BuyLabel.text = "АНГАР W10";
@@ -1287,70 +1842,85 @@ namespace Crusher.UI
             }
         }
 
-        private void ComputeRunPurchasePlan(GameSession session, StatId id, int curTotalLv, int maxLv, out int count, out double totalCost, out bool affordable)
+        private void ComputeRunPurchasePlan(
+            GameSession session, StatId id, int curLv, int maxLv,
+            out int countOut, out double costOut, out bool affordableOut)
         {
-            if (curTotalLv >= maxLv)
+            int rem = maxLv - curLv;
+            if (rem <= 0)
             {
-                count = 0;
-                totalCost = 0.0;
-                affordable = false;
+                countOut = 0;
+                costOut = 0.0;
+                affordableOut = false;
                 return;
             }
 
-            int mode = BuyMultSteps[_buyMultIdx];
-            double cash = session.RunCash;
-
-            if (mode == -1) // MAX affordable (at least 1 shown for price reference)
+            int step = BuyMultSteps[_buyMultIdx];
+            if (step > 0)
             {
+                int n = Math.Min(step, rem);
                 double sum = 0.0;
-                int n = 0;
-                for (int lv = curTotalLv; lv < maxLv && n < 100; lv++)
+                for (int k = 0; k < n; k++)
                 {
-                    double c = BalanceTables.GetCashCost(id, lv);
-                    if (sum + c > cash)
-                    {
-                        if (n == 0)
-                        {
-                            count = 1;
-                            totalCost = c;
-                            affordable = false;
-                            return;
-                        }
-                        break;
-                    }
-                    sum += c;
-                    n++;
+                    sum += BalanceTables.GetCashCost(id, curLv + k);
                 }
-                count = Math.Max(1, n);
-                totalCost = sum;
-                affordable = n > 0;
+                countOut = n;
+                costOut = sum;
+                affordableOut = session.RunCash >= sum - 1e-6;
                 return;
             }
 
-            int want = Math.Min(mode, maxLv - curTotalLv);
-            double acc = 0.0;
-            for (int k = 0; k < want; k++)
+            // MAX mode
+            double cash = session.RunCash;
+            double first = BalanceTables.GetCashCost(id, curLv);
+            if (cash < first - 1e-6)
             {
-                acc += BalanceTables.GetCashCost(id, curTotalLv + k);
+                countOut = 1;
+                costOut = first;
+                affordableOut = false;
+                return;
             }
-            count = want;
-            totalCost = acc;
-            affordable = cash >= acc;
+
+            int bought = 0;
+            double total = 0.0;
+            while (bought < rem && bought < 250)
+            {
+                double next = BalanceTables.GetCashCost(id, curLv + bought);
+                if (total + next > cash + 1e-6) break;
+                total += next;
+                bought++;
+            }
+
+            countOut = Math.Max(1, bought);
+            costOut = total;
+            affordableOut = bought > 0;
         }
+
+        // --- User Interaction Handlers ---
 
         private void SelectTab(StatTab tab)
         {
             if (_activeTab == tab) return;
             _activeTab = tab;
-            UiStyle.PlaySfx(SfxId.UiTap);
             ApplyTabVisuals();
+            UiStyle.PlaySfx(SfxId.UiTap);
+
+            for (int i = 0; i < MaxDeckCards; i++)
+            {
+                _cards[i].CachedTotalLv = -1;
+                _cards[i].CachedCostKey = -999;
+            }
         }
 
         private void ApplyTabVisuals()
         {
-            if (_tabAttackBg != null) _tabAttackBg.material = _activeTab == StatTab.Attack ? _style.MatTabActive : _style.MatTabInactive;
-            if (_tabDefenseBg != null) _tabDefenseBg.material = _activeTab == StatTab.Defense ? _style.MatTabActive : _style.MatTabInactive;
-            if (_tabUtilityBg != null) _tabUtilityBg.material = _activeTab == StatTab.Utility ? _style.MatTabActive : _style.MatTabInactive;
+            if (_style.MatTabActive == null || _style.MatTabInactive == null) return;
+            _tabAttackBg.material = _activeTab == StatTab.Attack ? _style.MatTabActive : _style.MatTabInactive;
+            _tabDefenseBg.material = _activeTab == StatTab.Defense ? _style.MatTabActive : _style.MatTabInactive;
+            _tabUtilityBg.material = _activeTab == StatTab.Utility ? _style.MatTabActive : _style.MatTabInactive;
+            _tabAttackLbl.color = _activeTab == StatTab.Attack ? UiStyle.TextAmber : UiStyle.TextPrimary;
+            _tabDefenseLbl.color = _activeTab == StatTab.Defense ? UiStyle.TextAmber : UiStyle.TextPrimary;
+            _tabUtilityLbl.color = _activeTab == StatTab.Utility ? UiStyle.TextAmber : UiStyle.TextPrimary;
         }
 
         private void OnClickCycleMultiplier()
@@ -1441,7 +2011,7 @@ namespace Crusher.UI
             {
                 UiStyle.PlaySfx(SfxId.UiUnlock);
                 _gemDroneBtnRect.gameObject.SetActive(false);
-                ShowToast("★ ДРОН ПЕРЕХВАЧЕН: +5 ГЕМОВ!", 2.4f);
+                ShowToast("◆ ДРОН ПЕРЕХВАЧЕН: +" + BalanceTables.GEM_DRONE_REWARD + " ГЕМОВ!", 2.4f);
             }
         }
 
@@ -1452,25 +2022,24 @@ namespace Crusher.UI
             OpenUwModal(_boundSession);
         }
 
-        private void OnClickPickUw(int rowIdx)
+        private void OnClickPickUw(int rowSlot)
         {
-            if (_boundSession == null || rowIdx < 0 || rowIdx >= 3) return;
-            UwId chosen = _uwRows[rowIdx].BoundUw;
+            if (_boundSession == null || rowSlot < 0 || rowSlot >= 3) return;
+            UwId chosen = _uwRows[rowSlot].BoundUw;
             if (_boundSession.TryUnlockUw(chosen))
             {
                 UiStyle.PlaySfx(SfxId.UiUnlock);
                 _uwModalRoot.gameObject.SetActive(false);
-                ShowToast("⚡ УЛЬТА АКТИВИРОВАНА: " + BalanceTables.Uws[(int)chosen].TitleRu + "!", 3.5f);
-                _cachedSynergyHash = int.MinValue;
+                ShowToast("⚡ ОТКРЫТО АБСОЛЮТНОЕ ОРУЖИЕ: " + BalanceTables.Uws[(int)chosen].TitleRu + "!", 3.8f);
             }
         }
 
-        private static void AnimateFtueBob(RectTransform rect, float baseY)
+        private static void AnimateFtueBob(RectTransform rt, float baseY)
         {
-            if (rect == null || !rect.gameObject.activeSelf) return;
-            Vector2 p = rect.anchoredPosition;
-            p.y = baseY + Mathf.Sin(Time.unscaledTime * 7.5f) * 8f;
-            rect.anchoredPosition = p;
+            if (rt == null || !rt.gameObject.activeSelf) return;
+            Vector2 p = rt.anchoredPosition;
+            p.y = baseY + Mathf.Sin(Time.unscaledTime * 7.0f) * 8f;
+            rt.anchoredPosition = p;
         }
     }
 }

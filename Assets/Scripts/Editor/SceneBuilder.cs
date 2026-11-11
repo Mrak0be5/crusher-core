@@ -34,10 +34,10 @@ namespace Crusher.Editor
         public const string FloorMeshAssetPath = "Assets/Settings/ArenaFloorMesh.asset";
         public const string MainScenePath = "Assets/Scenes/Main.unity";
 
-        [MenuItem("Crusher/Build/Build Materials, Registry & Main Scene (Wave 2)")]
+        [MenuItem("Crusher/Build/Build Materials, Registry & Main Scene (V2 Ultra)")]
         public static void BuildAll()
         {
-            Debug.Log("[SceneBuilder] Starting Wave 2 SceneBuilder.BuildAll...");
+            Debug.Log("[SceneBuilder] Starting V2 Ultra SceneBuilder.BuildAll...");
 
             EnsureDir(MaterialsDir);
             EnsureDir(AnimationsDir);
@@ -66,7 +66,7 @@ namespace Crusher.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-            Debug.Log("[SceneBuilder] SCENE_BUILD_PASS — Registry, 22 Materials, 5 AnimatorControllers, AlwaysIncludedShaders & Assets/Scenes/Main.unity built.");
+            Debug.Log("[SceneBuilder] SCENE_BUILD_PASS — Registry, 25 Materials, 5 AnimatorControllers, FoundryEnv, Dynamic Lights & Assets/Scenes/Main.unity built.");
         }
 
         private static void EnsureDir(string assetRelPath)
@@ -95,8 +95,21 @@ namespace Crusher.Editor
             var urp = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>("Assets/Settings/CrusherURP.asset");
             if (urp != null)
             {
-                // Portrait camera sits at ~31.9m depth so shadowDistance=52m covers the entire arena cleanly.
-                urp.shadowDistance = 52.0f;
+                // Covers both 9:20 Portrait (~32m) and 16:9 Landscape Foundry Masts/Bunkers (~38m..55m)
+                urp.shadowDistance = 58.0f;
+                urp.maxAdditionalLightsCount = 4;
+
+                var so = new SerializedObject(urp);
+                SerializedProperty shadowResProp = so.FindProperty("m_MainLightShadowmapResolution");
+                if (shadowResProp != null) shadowResProp.intValue = 2048;
+
+                SerializedProperty addModeProp = so.FindProperty("m_AdditionalLightsRenderingMode");
+                if (addModeProp != null) addModeProp.intValue = 1; // PerPixel
+
+                SerializedProperty softShadowsProp = so.FindProperty("m_SoftShadowsSupported");
+                if (softShadowsProp != null) softShadowsProp.boolValue = true;
+
+                so.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(urp);
             }
         }
@@ -163,6 +176,12 @@ namespace Crusher.Editor
 
         private static void PopulateMeshesAndModelPrefabs(CrusherAssetRegistry reg)
         {
+            reg.PrefabArenaFoundryEnv = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Art/Generated/Models/SM_ArenaFoundryEnv.fbx");
+            if (reg.PrefabArenaFoundryEnv == null)
+            {
+                Debug.LogWarning("[SceneBuilder] Optional V2 environment 'Assets/Art/Generated/Models/SM_ArenaFoundryEnv.fbx' not yet imported; scene will run without outer foundry props until re-built.");
+            }
+
             reg.PrefabShredderCore = MustLoad<GameObject>("Assets/Art/Generated/Models/SM_ShredderCore.fbx");
             reg.PrefabBossAtm = MustLoad<GameObject>("Assets/Art/Generated/Models/SM_Enemy_Boss_ATM.fbx");
             reg.PrefabElectromagnetBh = MustLoad<GameObject>("Assets/Art/Generated/Models/SM_Electromagnet_BH.fbx");
@@ -199,18 +218,36 @@ namespace Crusher.Editor
             Shader shBeam = MustLoad<Shader>("Assets/Shaders/VolumetricDeathRay.shader");
             Shader shUi = MustLoad<Shader>("Assets/Shaders/ProceduralSDFUI.shader");
 
-            // 1. Arena Floor (crisp architectural test-polygon concrete with high VFX/text contrast)
+            // 1. Arena Floor (V2 cast-steel foundry plates with recessed furnace pit, rivets & specular oil slicks)
             reg.MatArenaFloor = SaveMaterial("M_ArenaFloor", shFloor, m =>
             {
-                m.SetColor("_CenterColor", new Color(0.71f, 0.75f, 0.80f, 1f));
-                m.SetColor("_EdgeColor", new Color(0.56f, 0.60f, 0.67f, 1f));
-                m.SetColor("_GridColor", new Color(0.46f, 0.51f, 0.58f, 1f));
-                m.SetColor("_MajorRingColor", new Color(0.35f, 0.40f, 0.48f, 1f));
+                m.SetColor("_CenterColor", new Color(0.60f, 0.65f, 0.72f, 1f));
+                m.SetColor("_EdgeColor", new Color(0.42f, 0.47f, 0.54f, 1f));
+                m.SetColor("_GridColor", new Color(0.32f, 0.37f, 0.44f, 1f));
+                m.SetColor("_MajorRingColor", new Color(0.26f, 0.31f, 0.38f, 1f));
                 m.SetColor("_RangeColor", new Color(1.00f, 0.68f, 0.04f, 1f));
-                m.SetColor("_OrbRingColor", new Color(0.08f, 0.66f, 0.98f, 1f));
+                m.SetColor("_OrbRingColor", new Color(0.08f, 0.68f, 0.98f, 1f));
+                m.SetColor("_GoldenFloorGlow", new Color(2.40f, 1.35f, 0.18f, 1f));
                 m.SetFloat("_TowerRange", GameIdsAndScale.RANGE_0_WORLD);
                 m.SetFloat("_GridScale", GameIdsAndScale.WORLD_SCALE);
-                m.SetFloat("_VignetteRadius", 18.5f);
+                m.SetFloat("_NoiseStrength", 0.055f);
+                m.SetFloat("_VignetteRadius", 19.5f);
+            });
+
+            // 1b. Static Foundry Hall Environment (scrap bunkers, armored cable conduits, furnace pit grate & floodlight masts)
+            reg.MatFoundryEnvLit = SaveMaterial("Mat_FoundryEnvLit", shLit, m =>
+            {
+                m.SetColor("_BaseColor", new Color(0.16f, 0.19f, 0.25f, 1f));
+                m.SetColor("_ZoneArmorColor", new Color(0.22f, 0.26f, 0.33f, 1f));
+                m.SetColor("_ZoneTeethColor", new Color(0.88f, 0.62f, 0.14f, 1f));
+                m.SetColor("_ZoneCoilColor", new Color(1.65f, 0.58f, 0.12f, 1f));
+                m.SetFloat("_Metallic", 0.88f);
+                m.SetFloat("_Roughness", 0.34f);
+                m.SetFloat("_Anisotropy", 0.45f);
+                m.SetFloat("_EmissionBoost", 0.85f);
+                m.SetFloat("_GoldenMelt", 0.08f);
+                m.SetFloat("_RimOutlineStrength", 0.80f);
+                m.SetFloat("_OutlineWidth", 0.018f);
             });
 
             // 2. Shredder Core Chassis & 4 Visual Grades
@@ -463,7 +500,24 @@ namespace Crusher.Editor
                 m.SetFloat("_GoldenMelt", 0.0f);
             });
 
-            // 5. Vortex, Beams & Procedural SDF UI
+            reg.MatBrassShellInstanced = SaveMaterial("M_BrassShell_Instanced", shInst, m =>
+            {
+                m.enableInstancing = true;
+                m.SetFloat("_UseInstColor", 0.0f);
+                m.SetFloat("_UnlitSparkMode", 0.0f);
+                m.SetColor("_BaseColor", new Color(0.95f, 0.71f, 0.20f, 1f));
+                m.SetColor("_ZoneArmorColor", new Color(0.74f, 0.49f, 0.12f, 1f));
+                m.SetColor("_ZoneTeethColor", new Color(1.00f, 0.90f, 0.54f, 1f));
+                m.SetColor("_ZoneCoilColor", new Color(2.50f, 1.15f, 0.22f, 1f));
+                m.SetFloat("_Metallic", 0.95f);
+                m.SetFloat("_Roughness", 0.20f);
+                m.SetFloat("_Anisotropy", 0.75f);
+                m.SetFloat("_EmissionBoost", 1.25f);
+                m.SetFloat("_GoldenMelt", 0.0f);
+                m.SetFloat("_RimOutlineStrength", 0.78f);
+            });
+
+            // 5. Vortex, Supersonic Shockwaves, Beams & Procedural SDF UI
             reg.MatBlackHoleVortex = SaveMaterial("M_BlackHole_Vortex", shVortex, m =>
             {
                 m.SetColor("_InnerRimColor", new Color(1.60f, 3.80f, 6.20f, 1f));
@@ -479,6 +533,15 @@ namespace Crusher.Editor
                 m.SetColor("_SwirlColor", new Color(2.20f, 1.45f, 0.15f, 1f));
                 m.SetFloat("_SpinSpeed", 4.5f);
                 m.SetFloat("_FieldZoneMode", 1.0f);
+            });
+
+            reg.MatShockwaveRing = SaveMaterial("M_Shockwave_Ring", shVortex, m =>
+            {
+                m.SetFloat("_FieldZoneMode", 2.0f);
+                m.SetFloat("_HorizonRadius", 0.50f);
+                m.SetColor("_InnerRimColor", new Color(1.80f, 4.20f, 6.20f, 1f));
+                m.SetColor("_SwirlColor", new Color(0.65f, 1.80f, 4.20f, 1f));
+                m.SetFloat("_Intensity", 1.25f);
             });
 
             reg.MatBeamDeathRay = SaveMaterial("M_Beam_DeathRay", shBeam, m =>
@@ -693,8 +756,9 @@ namespace Crusher.Editor
         private static Mesh BuildArenaFloorMeshAsset()
         {
             DeleteIfExists(FloorMeshAssetPath);
-            const float halfExtent = 34.0f;
-            var mesh = new Mesh { name = "ArenaFloorQuad68m" };
+            // 96m x 96m quad covers both 9:20 Portrait and 16:9 / 21:9 Landscape WebGL up to 1.22x zoom out with zero horizon clipping
+            const float halfExtent = 48.0f;
+            var mesh = new Mesh { name = "ArenaFloorQuad96m" };
             mesh.vertices = new[]
             {
                 new Vector3(-halfExtent, 0f, -halfExtent),
@@ -716,6 +780,22 @@ namespace Crusher.Editor
             return mesh;
         }
 
+        private static Light BuildScenePointLight(string objName, Transform parent, Vector3 pos, Color col, float range, float intensity, bool enabledInit)
+        {
+            var go = new GameObject(objName);
+            go.transform.SetParent(parent, false);
+            go.transform.position = pos;
+            var lt = go.AddComponent<Light>();
+            lt.type = LightType.Point;
+            lt.color = col;
+            lt.range = range;
+            lt.intensity = intensity;
+            lt.shadows = LightShadows.None;
+            lt.enabled = enabledInit;
+            go.AddComponent<UniversalAdditionalLightData>();
+            return lt;
+        }
+
         private static void BuildMainScene(CrusherAssetRegistry registry, VolumeProfile volumeProfile, Mesh floorMesh)
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -723,10 +803,10 @@ namespace Crusher.Editor
             RenderSettings.ambientMode = AmbientMode.Trilight;
             RenderSettings.ambientSkyColor = new Color(0.56f, 0.62f, 0.70f, 1f);
             RenderSettings.ambientEquatorColor = new Color(0.42f, 0.47f, 0.54f, 1f);
-            RenderSettings.ambientGroundColor = new Color(0.28f, 0.31f, 0.36f, 1f);
+            RenderSettings.ambientGroundColor = new Color(0.34f, 0.28f, 0.24f, 1f);
             RenderSettings.fog = false;
 
-            // 1. Industrial Polygon Floor
+            // 1. Industrial Foundry Cast-Steel Floor + Optional Outer Foundry Environment (SM_ArenaFoundryEnv)
             var floorGo = new GameObject("ArenaFloor");
             var floorMf = floorGo.AddComponent<MeshFilter>();
             floorMf.sharedMesh = floorMesh;
@@ -735,7 +815,45 @@ namespace Crusher.Editor
             floorMr.shadowCastingMode = ShadowCastingMode.Off;
             floorMr.receiveShadows = true;
 
-            // 2. Studio Directional Key & Rim Lights
+            if (registry.PrefabArenaFoundryEnv != null)
+            {
+                var foundryGo = (GameObject)PrefabUtility.InstantiatePrefab(registry.PrefabArenaFoundryEnv);
+                if (foundryGo != null)
+                {
+                    foundryGo.name = "ArenaFoundryEnv";
+                    foundryGo.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+                    foundryGo.transform.localScale = Vector3.one;
+
+                    MeshFilter[] envMfs = foundryGo.GetComponentsInChildren<MeshFilter>(true);
+                    for (int i = 0; i < envMfs.Length; i++)
+                    {
+                        Mesh m = envMfs[i].sharedMesh;
+                        if (m == null) continue;
+                        Vector3 sz = m.bounds.size;
+                        // Guarantee Y-up world orientation (30.5m X * 5.47m Y * 31.3m Z) regardless of FBX node pre-rotation
+                        if (sz.y < sz.z * 0.5f && sz.x > 15f && sz.z > 15f)
+                        {
+                            envMfs[i].transform.rotation = Quaternion.identity;
+                        }
+                        else if (sz.z < sz.y * 0.5f && sz.x > 15f && sz.y > 15f)
+                        {
+                            envMfs[i].transform.rotation = Quaternion.Euler(-90f, 0f, 0f);
+                        }
+                    }
+
+                    Renderer[] envRenderers = foundryGo.GetComponentsInChildren<Renderer>(true);
+                    Material envMat = registry.MatFoundryEnvLit != null ? registry.MatFoundryEnvLit : registry.MatCoreChassis;
+                    for (int i = 0; i < envRenderers.Length; i++)
+                    {
+                        envRenderers[i].sharedMaterial = envMat;
+                        envRenderers[i].shadowCastingMode = ShadowCastingMode.On;
+                        envRenderers[i].receiveShadows = true;
+                        Debug.Log($"[SceneBuilder] ArenaFoundryEnv[{i}] '{envRenderers[i].name}' worldBounds={envRenderers[i].bounds.size} center={envRenderers[i].bounds.center}");
+                    }
+                }
+            }
+
+            // 2. Studio Directional Key (2048 Soft Shadows) & Rim Lights
             var keyLightGo = new GameObject("DirectionalLight_Key");
             keyLightGo.transform.rotation = Quaternion.Euler(52f, -34f, 0f);
             var keyLight = keyLightGo.AddComponent<Light>();
@@ -762,7 +880,7 @@ namespace Crusher.Editor
             vol.priority = 1f;
             vol.sharedProfile = volumeProfile;
 
-            // 4. Portrait Arena Camera Rig
+            // 4. Adaptive V2 Camera Rig (9:20 Mobile Portrait + 16:9 WebGL Landscape + Foundry/Action Point Lights)
             var camRigGo = new GameObject("CameraRig");
             var camRig = camRigGo.AddComponent<CameraRigTrauma>();
 
@@ -771,9 +889,9 @@ namespace Crusher.Editor
             camGo.transform.SetParent(camRigGo.transform, false);
             var cam = camGo.AddComponent<Camera>();
             cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.66f, 0.70f, 0.76f, 1f);
+            cam.backgroundColor = new Color(0.36f, 0.41f, 0.48f, 1f);
             cam.nearClipPlane = 0.5f;
-            cam.farClipPlane = 95.0f;
+            cam.farClipPlane = 115.0f;
             cam.fieldOfView = CameraRigTrauma.VERTICAL_FOV_DEGREES;
             cam.allowHDR = true;
             cam.allowMSAA = true;
@@ -783,7 +901,12 @@ namespace Crusher.Editor
             camData.renderPostProcessing = true;
             camData.antialiasing = AntialiasingMode.None;
 
-            camRig.BindSceneObjects(cam, keyLight, rimLight);
+            Light pitLight = BuildScenePointLight("FoundryPit_PointLight", camRigGo.transform, new Vector3(0f, 1.25f, 0f), new Color(1.0f, 0.46f, 0.12f, 1f), 8.5f, 1.15f, true);
+            Light muzzleLight = BuildScenePointLight("Dynamic_MuzzleFlashLight", camRigGo.transform, new Vector3(0f, 1.15f, 0.9f), new Color(1.0f, 0.74f, 0.30f, 1f), 7.5f, 0f, false);
+            Light fieldLight = BuildScenePointLight("Dynamic_FieldOrBeamLight", camRigGo.transform, new Vector3(0f, 1.35f, 0f), new Color(0.55f, 0.42f, 1.0f, 1f), 11.5f, 0f, false);
+            Light expLight = BuildScenePointLight("Dynamic_ExplosionLight", camRigGo.transform, new Vector3(0f, 1.50f, 0f), new Color(1.0f, 0.68f, 0.24f, 1f), 14.0f, 0f, false);
+
+            camRig.BindSceneObjectsV2(cam, keyLight, rimLight, pitLight, muzzleLight, fieldLight, expLight);
 
             // 5. uGUI EventSystem
             var esGo = new GameObject("EventSystem");

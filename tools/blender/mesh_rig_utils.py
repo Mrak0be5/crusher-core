@@ -188,6 +188,249 @@ def add_cutter_teeth_ring(bm: bmesh.types.BMesh, count: int, r_root: float, r_ti
         _merge_sub_bm(bm, sub, None, zone, p_hash, bone_id)
 
 
+def add_helical_hook_teeth_ring(
+    bm: bmesh.types.BMesh,
+    count: int,
+    r_root: float,
+    r_tip: float,
+    ang_width_root: float,
+    ang_width_tip: float,
+    height: float,
+    z_center: float = 0.0,
+    rake_dir: float = 1.0,
+    hook_ang: float = 0.14,
+    twist_ang: float = 0.12,
+    phase_offset: float = 0.0,
+    z_slices: int = 4,
+    bevel: float = 0.005,
+    zone: float = 0.70,
+    bone_id: int = 0,
+):
+    """Builds multi-slice helical hooked car-shredder claw blades with raked gullets."""
+    hz = height * 0.5
+    r_mid = r_root + (r_tip - r_root) * 0.58
+    s_dir = 1.0 if rake_dir >= 0.0 else -1.0
+    nz = max(2, z_slices)
+
+    for i in range(count):
+        sub = bmesh.new()
+        base_a = phase_offset + (2.0 * math.pi * i) / count
+        rings = []
+        for sz in range(nz):
+            tz = sz / (nz - 1)
+            zv = z_center - hz + height * tz
+            tw = (tz - 0.5) * twist_ang
+            taper = 1.0 - 0.10 * abs(tz - 0.5) * 2.0
+            rt = r_root + (r_tip - r_root) * taper
+
+            # 6-point hooked claw cross-section (CCW in XY)
+            a0 = base_a - ang_width_root * 0.52 + tw
+            a1 = base_a - ang_width_tip * 0.45 + s_dir * hook_ang * 0.55 + tw
+            a2 = base_a + s_dir * hook_ang * 1.15 - ang_width_tip * 0.15 + tw
+            a3 = base_a + s_dir * hook_ang * 1.15 + ang_width_tip * 0.55 + tw
+            a4 = base_a + ang_width_root * 0.28 + s_dir * hook_ang * 0.35 + tw
+            a5 = base_a + ang_width_root * 0.52 + tw
+
+            prof = [
+                (r_root, a0),
+                (r_mid, a1),
+                (rt, a2),
+                (rt * 0.985, a3),
+                (r_mid * 0.96, a4),
+                (r_root, a5),
+            ]
+            if s_dir < 0.0:
+                # Keep consistent outward face winding regardless of rake sign
+                prof = [
+                    (r_root, base_a - ang_width_root * 0.52 + tw),
+                    (r_mid * 0.96, base_a - ang_width_root * 0.28 + s_dir * hook_ang * 0.35 + tw),
+                    (rt * 0.985, base_a + s_dir * hook_ang * 1.15 - ang_width_tip * 0.55 + tw),
+                    (rt, base_a + s_dir * hook_ang * 1.15 + ang_width_tip * 0.15 + tw),
+                    (r_mid, base_a + ang_width_tip * 0.45 + s_dir * hook_ang * 0.55 + tw),
+                    (r_root, base_a + ang_width_root * 0.52 + tw),
+                ]
+            rings.append([sub.verts.new((rr * math.cos(aa), rr * math.sin(aa), zv)) for (rr, aa) in prof])
+
+        n_p = len(rings[0])
+        for sz in range(nz - 1):
+            r0, r1 = rings[sz], rings[sz + 1]
+            for j in range(n_p):
+                jn = (j + 1) % n_p
+                sub.faces.new((r0[j], r0[jn], r1[jn], r1[j]))
+        sub.faces.new(tuple(reversed(rings[0])))
+        sub.faces.new(tuple(rings[-1]))
+        bmesh.ops.recalc_face_normals(sub, faces=sub.faces[:])
+
+        if bevel > 0.0:
+            sharp = [e for e in sub.edges if len(e.link_faces) == 2 and e.calc_face_angle(0.0) > 0.55]
+            if sharp:
+                bmesh.ops.bevel(sub, geom=sharp, offset=bevel, segments=1,
+                                affect="EDGES", profile=0.5, clamp_overlap=True)
+        p_hash = 0.12 + 0.80 * ((i * 11) % count) / max(1, count)
+        _merge_sub_bm(bm, sub, None, zone, p_hash, bone_id)
+
+
+def add_bolt_ring(
+    bm: bmesh.types.BMesh,
+    count: int,
+    radius: float,
+    z_center: float = 0.0,
+    bolt_r: float = 0.020,
+    bolt_h: float = 0.020,
+    phase_offset: float = 0.0,
+    radial: bool = False,
+    zone: float = 0.70,
+    bone_id: int = 0,
+):
+    """Adds a ring of 6-sided hex flange bolts (either vertical +Z or radially outward)."""
+    for i in range(count):
+        a = phase_offset + (2.0 * math.pi * i) / count
+        cx, cy = math.cos(a) * radius, math.sin(a) * radius
+        rot = (math.pi * 0.5, 0.0, a - math.pi * 0.5) if radial else (0.0, 0.0, a)
+        add_cylinder(
+            bm, r1=bolt_r, r2=bolt_r * 0.86, depth=bolt_h, segs=6,
+            center=(cx, cy, z_center), rot_euler=rot, bevel=0.0,
+            zone=zone, part_hash=0.25 + 0.5 * ((i * 5) % max(1, count)) / max(1, count),
+            bone_id=bone_id,
+        )
+
+
+def add_ibeam(
+    bm: bmesh.types.BMesh,
+    length: float,
+    depth: float = 0.28,
+    flange_w: float = 0.22,
+    web_t: float = 0.045,
+    flange_t: float = 0.045,
+    center=(0.0, 0.0, 0.0),
+    rot_euler=(0.0, 0.0, 0.0),
+    bevel: float = 0.006,
+    zone: float = 0.35,
+    part_hash: float = 0.42,
+    bone_id: int = 0,
+):
+    """Builds a structural H/I-beam aligned along local Z, transformed to world space."""
+    sub = bmesh.new()
+    # Central web
+    add_box(sub, size=(web_t, depth - flange_t * 1.2, length), center=(0.0, 0.0, 0.0),
+            bevel=bevel, zone=zone, part_hash=part_hash, bone_id=bone_id)
+    # Front & back flanges
+    fy = (depth - flange_t) * 0.5
+    for sy in (-1.0, 1.0):
+        add_box(sub, size=(flange_w, flange_t, length), center=(0.0, sy * fy, 0.0),
+                bevel=bevel, zone=zone, part_hash=part_hash + 0.07, bone_id=bone_id)
+    _merge_sub_bm(bm, sub, make_xform(center, rot_euler), zone, part_hash, bone_id)
+
+
+def add_corrugated_cable(
+    bm: bmesh.types.BMesh,
+    points: list[tuple[float, float, float]],
+    radius: float = 0.11,
+    segs: int = 8,
+    collar_every: int = 2,
+    zone: float = 0.35,
+    collar_zone: float = 0.70,
+    bone_id: int = 0,
+):
+    """Sweeps a multi-segment armored power cable along 3D polyline points with clamping collars."""
+    if len(points) < 2:
+        return
+    pts = [Vector(p) for p in points]
+    sub = bmesh.new()
+    rings = []
+    for idx, p in enumerate(pts):
+        if idx == 0:
+            t_dir = (pts[1] - pts[0]).normalized()
+        elif idx == len(pts) - 1:
+            t_dir = (pts[-1] - pts[-2]).normalized()
+        else:
+            t_dir = ((pts[idx] - pts[idx - 1]).normalized() + (pts[idx + 1] - pts[idx]).normalized()).normalized()
+        if t_dir.length_squared < 1e-6:
+            t_dir = Vector((0.0, 0.0, 1.0))
+        up = Vector((0.0, 0.0, 1.0)) if abs(t_dir.z) < 0.92 else Vector((1.0, 0.0, 0.0))
+        n_vec = t_dir.cross(up).normalized()
+        b_vec = t_dir.cross(n_vec).normalized()
+        ring = []
+        for s in range(segs):
+            ang = 2.0 * math.pi * s / segs
+            off = n_vec * (math.cos(ang) * radius) + b_vec * (math.sin(ang) * radius)
+            ring.append(sub.verts.new(p + off))
+        rings.append((ring, p, t_dir))
+
+    for i in range(len(rings) - 1):
+        r0 = rings[i][0]
+        r1 = rings[i + 1][0]
+        for s in range(segs):
+            sn = (s + 1) % segs
+            sub.faces.new((r0[s], r0[sn], r1[sn], r1[s]))
+    sub.faces.new(tuple(reversed(rings[0][0])))
+    sub.faces.new(tuple(rings[-1][0]))
+    bmesh.ops.recalc_face_normals(sub, faces=sub.faces[:])
+    _merge_sub_bm(bm, sub, None, zone, 0.38, bone_id)
+
+    if collar_every > 0:
+        for idx in range(1, len(rings) - 1):
+            if idx % collar_every == 0:
+                _, p_c, t_dir = rings[idx]
+                q = t_dir.to_track_quat("Z", "Y").to_euler()
+                add_cylinder(
+                    bm, r1=radius * 1.24, r2=radius * 1.24, depth=radius * 0.75, segs=segs,
+                    center=(p_c.x, p_c.y, p_c.z), rot_euler=(q.x, q.y, q.z),
+                    bevel=radius * 0.08, zone=collar_zone, part_hash=0.72, bone_id=bone_id,
+                )
+
+
+def add_tread_track_pod(
+    bm: bmesh.types.BMesh,
+    center: tuple[float, float, float],
+    length: float,
+    height: float,
+    width: float,
+    wheel_count: int = 4,
+    cleat_count: int = 10,
+    bone_id: int = 0,
+):
+    """Builds a detailed armored caterpillar track pod (wheels, frame, top/bottom cleats)."""
+    cx, cy, cz = center
+    r_end = height * 0.5
+    straight = max(0.05, length - height)
+    # Inner armored bogie beam
+    add_box(bm, size=(width * 0.72, straight + r_end * 0.9, height * 0.56),
+            center=(cx, cy, cz), bevel=0.012, zone=0.0, part_hash=0.28, bone_id=bone_id)
+    # Road wheels & drive sprockets along Y
+    for w in range(wheel_count):
+        ty = -0.5 + w / max(1, wheel_count - 1) if wheel_count > 1 else 0.0
+        wy = cy + ty * straight
+        add_cylinder(bm, r1=r_end * 0.84, r2=r_end * 0.84, depth=width * 0.92, segs=12,
+                     center=(cx, wy, cz), rot_euler=(0.0, math.pi * 0.5, 0.0),
+                     bevel=0.008, zone=0.35, part_hash=0.45 + 0.06 * w, bone_id=bone_id)
+        add_cylinder(bm, r1=r_end * 0.36, r2=r_end * 0.36, depth=width * 1.04, segs=8,
+                     center=(cx, wy, cz), rot_euler=(0.0, math.pi * 0.5, 0.0),
+                     bevel=0.005, zone=0.70, part_hash=0.74, bone_id=bone_id)
+    # Top & bottom track belts
+    for sz in (-1.0, 1.0):
+        add_box(bm, size=(width, straight, height * 0.11),
+                center=(cx, cy, cz + sz * (r_end - height * 0.055)),
+                bevel=0.006, zone=0.35, part_hash=0.36, bone_id=bone_id)
+    # Individual tread cleats along top, bottom, and front/rear arcs
+    n_lin = max(2, cleat_count // 2)
+    for k in range(n_lin):
+        yk = cy - straight * 0.45 + straight * 0.90 * (k / max(1, n_lin - 1))
+        for sz in (-1.0, 1.0):
+            add_box(bm, size=(width * 1.05, straight * 0.55 / n_lin, height * 0.08),
+                    center=(cx, yk, cz + sz * (r_end - height * 0.02)),
+                    bevel=0.004, zone=0.70, part_hash=0.66, bone_id=bone_id)
+    for sy in (-1.0, 1.0):
+        ey = cy + sy * straight * 0.5
+        for a_deg in (-55.0, 0.0, 55.0):
+            ar = math.radians(a_deg)
+            py = ey + sy * math.cos(ar) * (r_end * 0.94)
+            pz = cz + math.sin(ar) * (r_end * 0.94)
+            add_box(bm, size=(width * 1.05, height * 0.12, height * 0.08),
+                    center=(cx, py, pz), rot_euler=(-sy * (math.pi * 0.5 - ar), 0.0, 0.0),
+                    bevel=0.004, zone=0.70, part_hash=0.68, bone_id=bone_id)
+
+
 def mesh_true_dims(ob: bpy.types.Object) -> list[float]:
     me = ob.data
     if len(me.vertices) == 0:

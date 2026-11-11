@@ -38,6 +38,9 @@ namespace Crusher.Core
         public OfflineProgressSummary LastOfflineSummary { get; private set; }
         public CrusherAssetRegistry Registry => _registry;
         public CameraRigTrauma CameraRig => _cameraRig;
+        public CoreAnimatorView CoreView => _coreView;
+        public WeldingSparksSystem SparksSystem => _sparksSystem;
+        public ProceduralSfxPlayer SfxPlayer => _sfxPlayer;
         public CrusherUiRoot UiRoot => _uiRoot;
 
         public string SaveFilePath => Path.Combine(Application.persistentDataPath, "save.json");
@@ -116,7 +119,11 @@ namespace Crusher.Core
             Camera worldCam = _cameraRig != null ? _cameraRig.WorldCamera : Camera.main;
 
             if (_sfxPlayer != null) _sfxPlayer.Initialize(_registry);
-            if (_coreView != null) _coreView.Initialize(_registry, _arenaFloorRenderer);
+            if (_coreView != null)
+            {
+                _coreView.Initialize(_registry, _arenaFloorRenderer);
+                _coreView.ClearShockwaves();
+            }
             if (_enemySystem != null) _enemySystem.Initialize(_registry);
             if (_debrisSystem != null)
             {

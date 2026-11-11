@@ -389,9 +389,9 @@ namespace Crusher.Editor
                 .OrderBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            if (fbxFiles.Length != 14)
+            if (fbxFiles.Length != 14 && fbxFiles.Length != 15)
             {
-                throw new InvalidOperationException($"Expected 14 FBX files in Assets/Art/Generated/Models, found {fbxFiles.Length}.");
+                throw new InvalidOperationException($"Expected 14 or 15 FBX files in Assets/Art/Generated/Models, found {fbxFiles.Length}.");
             }
 
             var allImportedClips = new Dictionary<string, AnimationClip>(StringComparer.Ordinal);

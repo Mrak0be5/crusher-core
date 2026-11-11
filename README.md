@@ -1,7 +1,7 @@
-# CRUSHER CORE: Hyper Shredder (Android v1.0.0)
+# CRUSHER CORE V2 ULTRA: Hyper Shredder (WebGL 2.0 & Android ARM64)
 
-Индустриальный 3D tower-shredder для Android (`ARM64-v8a`, `IL2CPP`, `Unity 6000.4.7f1` URP), созданный на 100% процедурно с нуля (Zero Asset Store: процедурные 3D-риги и осколки Вороного из Blender 5.2, кастомные HLSL-шейдеры анизотропного металла, SDF UI/иконки и DSP-синтез звука).
+Индустриальный 3D tower-shredder (`Unity 6000.4.7f1` URP Forward), созданный на 100% процедурно с нуля (Zero Asset Store: литейный цех `SM_ArenaFoundryEnv` и двухбарабанные карбидно-алмазные роторы из Blender 5.2, кастомные HLSL-шейдеры с аналитическим Foundry IBL и накалом металла, адаптивный интерфейс `16:9` ПК WebGL + `9:20` смартфон, SDF-иконки и процедурный DSP-звук).
 
-- **Витрина и QR-код загрузки:** https://mrak0be5.github.io/crusher-core/
-- **Прямая ссылка на подписанный APK (`v1.0.0`):** https://github.com/Mrak0be5/crusher-core/releases/download/v1.0.0/CrusherCore-v1.0.0-arm64.apk
-- **Требования:** Android 8.0+ (`API 26–35`), `ARM64`, портретная ориентация (`Vulkan / OpenGL ES 3.0`).
+- **Играть прямо в браузере (WebGL 2.0 Playable Build):** https://mrak0be5.github.io/crusher-core/
+- **Скачать подписанный Android APK (`v1.0.0` V2 Ultra, `34.77 МБ`):** https://github.com/Mrak0be5/crusher-core/releases/download/v1.0.0/CrusherCore-v1.0.0-arm64.apk
+- **Горячие клавиши ПК (WebGL):** `[1–3]` Вкладки • `[Q]` Кратность покупки • `[Space]` Скорость боя • `[Tab]` Ангар • `[M]` Звук • `[Колесо мыши]` 3D-зум камеры.

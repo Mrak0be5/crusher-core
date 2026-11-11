@@ -6,13 +6,14 @@ using Crusher.Core;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace Crusher.UI
 {
     /// <summary>
     /// Zero-allocation fixed-pool tween runner for industrial UI micro-animations
-    /// (scale punch on upgrade taps, CanvasGroup fades, anchored Y slides).
+    /// (scale punch on upgrade taps, hover/press uniform scales, CanvasGroup fades, anchored Y slides).
     /// </summary>
     public sealed class TweenRunner
     {
@@ -21,7 +22,8 @@ namespace Crusher.UI
             None = 0,
             PunchScale = 1,
             CanvasAlpha = 2,
-            AnchoredY = 3
+            AnchoredY = 3,
+            UniformScale = 4
         }
 
         private struct TweenSlot
@@ -36,18 +38,28 @@ namespace Crusher.UI
             public Vector3 BaseScale;
         }
 
-        private const int MaxTweens = 48;
+        private const int MaxTweens = 64;
         private readonly TweenSlot[] _slots = new TweenSlot[MaxTweens];
 
         public void PunchScale(RectTransform target, float amplitude = 0.11f, float duration = 0.18f)
         {
             if (target == null) return;
 
+            // Cancel any UniformScale on same rect so punch plays cleanly around Vector3.one
+            for (int i = 0; i < MaxTweens; i++)
+            {
+                if (_slots[i].Kind == TweenKind.UniformScale && ReferenceEquals(_slots[i].Rect, target))
+                {
+                    _slots[i].Kind = TweenKind.None;
+                }
+            }
+
             for (int i = 0; i < MaxTweens; i++)
             {
                 if (_slots[i].Kind == TweenKind.PunchScale && ReferenceEquals(_slots[i].Rect, target))
                 {
-                    target.localScale = _slots[i].BaseScale;
+                    target.localScale = Vector3.one;
+                    _slots[i].BaseScale = Vector3.one;
                     _slots[i].Elapsed = 0f;
                     _slots[i].Duration = Mathf.Max(0.04f, duration);
                     _slots[i].From = amplitude;
@@ -63,7 +75,46 @@ namespace Crusher.UI
                 Elapsed = 0f,
                 Duration = Mathf.Max(0.04f, duration),
                 From = amplitude,
-                BaseScale = target.localScale
+                BaseScale = Vector3.one
+            };
+        }
+
+        public void SetScale(RectTransform target, float toUniformScale, float duration = 0.11f)
+        {
+            if (target == null) return;
+            float curScale = target.localScale.x;
+
+            // Do not override an active punch animation until it settles
+            for (int i = 0; i < MaxTweens; i++)
+            {
+                if (_slots[i].Kind == TweenKind.PunchScale && ReferenceEquals(_slots[i].Rect, target))
+                {
+                    _slots[i].BaseScale = new Vector3(toUniformScale, toUniformScale, 1f);
+                    return;
+                }
+            }
+
+            for (int i = 0; i < MaxTweens; i++)
+            {
+                if (_slots[i].Kind == TweenKind.UniformScale && ReferenceEquals(_slots[i].Rect, target))
+                {
+                    _slots[i].Elapsed = 0f;
+                    _slots[i].Duration = Mathf.Max(0.02f, duration);
+                    _slots[i].From = curScale;
+                    _slots[i].To = toUniformScale;
+                    return;
+                }
+            }
+
+            int idx = AllocateSlot();
+            _slots[idx] = new TweenSlot
+            {
+                Kind = TweenKind.UniformScale,
+                Rect = target,
+                Elapsed = 0f,
+                Duration = Mathf.Max(0.02f, duration),
+                From = curScale,
+                To = toUniformScale
             };
         }
 
@@ -182,6 +233,18 @@ namespace Crusher.UI
                         Vector2 pos = s.Rect.anchoredPosition;
                         pos.y = Mathf.LerpUnclamped(s.From, s.To, easeY);
                         s.Rect.anchoredPosition = pos;
+                        if (t >= 1f) s.Kind = TweenKind.None;
+                        break;
+
+                    case TweenKind.UniformScale:
+                        if (s.Rect == null)
+                        {
+                            s.Kind = TweenKind.None;
+                            break;
+                        }
+                        float easeS = 1f - (1f - t) * (1f - t);
+                        float sc = Mathf.Lerp(s.From, s.To, easeS);
+                        s.Rect.localScale = new Vector3(sc, sc, 1f);
                         if (t >= 1f) s.Kind = TweenKind.None;
                         break;
                 }
@@ -468,6 +531,25 @@ namespace Crusher.UI
             }
         }
 
+        public static bool IsMuted =>
+            ProceduralSfxPlayer.Instance != null ? ProceduralSfxPlayer.Instance.IsMuted : AudioListener.pause;
+
+        public static bool ToggleMute()
+        {
+            ProceduralSfxPlayer inst = ProceduralSfxPlayer.Instance;
+            if (inst != null)
+            {
+                inst.ToggleMute();
+                if (!inst.IsMuted)
+                {
+                    inst.PlayUI(SfxId.UiTap);
+                }
+                return inst.IsMuted;
+            }
+            AudioListener.pause = !AudioListener.pause;
+            return AudioListener.pause;
+        }
+
         private static Material CloneSdf(Material baseSdf)
         {
             if (baseSdf == null) return null;
@@ -509,11 +591,168 @@ namespace Crusher.UI
     }
 
     /// <summary>
-    /// Programmatic uGUI widget builders (1080x2400 industrial layout, zero runtime prefab dependencies).
+    /// Tactile desktop/mobile hover & press feedback (1.025x scale + border rim highlight)
+    /// driven by the zero-allocation TweenRunner pool.
+    /// </summary>
+    public sealed class UiHoverFeedback : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler, IPointerUpHandler
+    {
+        private TweenRunner _tweens;
+        private RectTransform _target;
+        private Image _hoverRim;
+        private Image _hoverSheen;
+        private Selectable _selectable;
+        private float _hoverScale = 1.025f;
+        private float _pressScale = 0.972f;
+        private bool _hovered;
+
+        public void Configure(TweenRunner tweens, RectTransform target, Image hoverRim, Image hoverSheen, float hoverScale = 1.025f, float pressScale = 0.972f)
+        {
+            _tweens = tweens;
+            _target = target;
+            _hoverRim = hoverRim;
+            _hoverSheen = hoverSheen;
+            _hoverScale = hoverScale;
+            _pressScale = pressScale;
+            _selectable = GetComponent<Selectable>();
+            SetHighlightVisible(false);
+        }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            if (_selectable != null && !_selectable.IsInteractable()) return;
+            _hovered = true;
+            SetHighlightVisible(true);
+            if (_tweens != null && _target != null)
+            {
+                _tweens.SetScale(_target, _hoverScale, 0.10f);
+            }
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            _hovered = false;
+            SetHighlightVisible(false);
+            if (_tweens != null && _target != null)
+            {
+                _tweens.SetScale(_target, 1.0f, 0.12f);
+            }
+        }
+
+        public void OnPointerDown(PointerEventData eventData)
+        {
+            if (_selectable != null && !_selectable.IsInteractable()) return;
+            if (_tweens != null && _target != null)
+            {
+                _tweens.SetScale(_target, _pressScale, 0.06f);
+            }
+        }
+
+        public void OnPointerUp(PointerEventData eventData)
+        {
+            if (_tweens != null && _target != null)
+            {
+                _tweens.SetScale(_target, _hovered ? _hoverScale : 1.0f, 0.10f);
+            }
+        }
+
+        private void OnDisable()
+        {
+            _hovered = false;
+            SetHighlightVisible(false);
+            if (_target != null)
+            {
+                _target.localScale = Vector3.one;
+            }
+        }
+
+        private void SetHighlightVisible(bool vis)
+        {
+            if (_hoverRim != null && _hoverRim.enabled != vis) _hoverRim.enabled = vis;
+            if (_hoverSheen != null && _hoverSheen.enabled != vis) _hoverSheen.enabled = vis;
+        }
+    }
+
+    /// <summary>
+    /// Exact full-screen projection helper (outside SafeAreaRoot) so diegetic rotor HP ring,
+    /// GemDrone badge, and damage numbers stay 1:1 concentric on 16:9 Desktop, 9:20 Mobile, and OffscreenGate.
+    /// </summary>
+    public static class UiScreenSpace
+    {
+        public static Vector2 ProjectWorldToOverlay(Camera worldCam, Canvas canvas, RectTransform fullScreenOverlayRect, Vector3 worldPos)
+        {
+            if (worldCam != null && canvas != null && fullScreenOverlayRect != null)
+            {
+                Vector3 vp = worldCam.WorldToViewportPoint(worldPos);
+                if (vp.z > 0.05f)
+                {
+                    int sw = worldCam.targetTexture != null ? worldCam.targetTexture.width : Screen.width;
+                    int sh = worldCam.targetTexture != null ? worldCam.targetTexture.height : Screen.height;
+                    if (sw <= 0 || sh <= 0)
+                    {
+                        sw = 1080;
+                        sh = 2400;
+                    }
+
+                    Rect r = fullScreenOverlayRect.rect;
+                    float rw = r.width;
+                    float rh = r.height;
+                    bool targetLandscape = sw > sh * 1.1f;
+                    bool rectMatchesOrientation = rw > 10f && rh > 10f && ((rw > rh) == targetLandscape);
+                    if (!rectMatchesOrientation)
+                    {
+                        float refW = targetLandscape ? 1920f : 1080f;
+                        float refH = targetLandscape ? 1080f : 2400f;
+                        float logW = Mathf.Log(sw / refW, 2f);
+                        float logH = Mathf.Log(sh / refH, 2f);
+                        float scaleFactor = Mathf.Pow(2f, (logW + logH) * 0.5f);
+                        rw = sw / scaleFactor;
+                        rh = sh / scaleFactor;
+                    }
+                    return new Vector2((vp.x - 0.5f) * rw, (vp.y - 0.5f) * rh);
+                }
+            }
+            return new Vector2(0f, 160f);
+        }
+    }
+
+    /// <summary>
+    /// Programmatic uGUI widget builders (adaptive 1080x2400 Portrait & 1920x1080 Landscape, zero runtime prefab dependencies).
     /// Note: Images using ProceduralSDFUI keep sprite=null so UV stays [0..1]; atlas icons use child Images with default UI material.
     /// </summary>
     public static class UiFactory
     {
+        private static TweenRunner _activeTweens;
+
+        public static void SetGlobalTweenRunner(TweenRunner tweens)
+        {
+            _activeTweens = tweens;
+        }
+
+        public static UiHoverFeedback AttachHover(RectTransform target, float hoverScale = 1.025f, float pressScale = 0.972f, Color? rimTint = null)
+        {
+            if (target == null) return null;
+            UiHoverFeedback hf = target.GetComponent<UiHoverFeedback>();
+            if (hf != null) return hf;
+
+            // Subtle interior sheen + crisp top accent rim (default UI material, batched, zero raycast)
+            RectTransform sheenRt = CreateStretchRect("_HoverSheen", target, 4f, 4f, 4f, 4f);
+            var sheenImg = sheenRt.gameObject.AddComponent<Image>();
+            sheenImg.color = new Color(0.75f, 0.92f, 1.00f, 0.065f);
+            sheenImg.raycastTarget = false;
+            sheenImg.enabled = false;
+
+            RectTransform rimRt = CreateRect("_HoverRim", target,
+                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -2f), new Vector2(-18f, 3f));
+            var rimImg = rimRt.gameObject.AddComponent<Image>();
+            rimImg.color = rimTint ?? new Color(0.45f, 0.92f, 1.00f, 0.85f);
+            rimImg.raycastTarget = false;
+            rimImg.enabled = false;
+
+            hf = target.gameObject.AddComponent<UiHoverFeedback>();
+            hf.Configure(_activeTweens, target, rimImg, sheenImg, hoverScale, pressScale);
+            return hf;
+        }
         public static RectTransform CreateRect(string name, Transform parent, Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot, Vector2 anchoredPos, Vector2 sizeDelta)
         {
             var go = new GameObject(name, typeof(RectTransform));
@@ -616,6 +855,7 @@ namespace Crusher.UI
                 TextAlignmentOptions.Center, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(-12f, -6f), wrap: false);
 
+            AttachHover(bgImage.rectTransform, 1.025f, 0.972f);
             return btn;
         }
     }
@@ -626,8 +866,32 @@ namespace Crusher.UI
     /// </summary>
     public static class UiFormat
     {
-        private static readonly char[] SharedChars = new char[96];
+        private static readonly char[] SharedChars = new char[128];
         private static readonly StringBuilder SharedSb = new StringBuilder(160);
+
+        public static void SetCombatTelemetry(TMP_Text label, double dps, int rpm, int kills, ref long cachedKey)
+        {
+            if (label == null) return;
+            long dpsQ = ComputeCompactKey(Math.Max(0.0, dps));
+            long key = (dpsQ * 1000003L) ^ ((long)rpm * 7919L) ^ (long)kills;
+            if (key == cachedKey) return;
+            cachedKey = key;
+
+            int pos = 0;
+            const string p1 = "⚡ DPS ";
+            for (int i = 0; i < p1.Length; i++) SharedChars[pos++] = p1[i];
+            pos = AppendCompactDouble(SharedChars, pos, Math.Max(0.1, dps));
+
+            const string p2 = "  •  ОБОРОТЫ ";
+            for (int i = 0; i < p2.Length; i++) SharedChars[pos++] = p2[i];
+            pos = AppendNonNegInt(SharedChars, pos, Math.Max(0, rpm));
+
+            const string p3 = " RPM  •  УБИТО ";
+            for (int i = 0; i < p3.Length; i++) SharedChars[pos++] = p3[i];
+            pos = AppendNonNegInt(SharedChars, pos, Math.Max(0, kills));
+
+            label.SetCharArray(SharedChars, 0, pos);
+        }
 
         public static void SetCompactDouble(TMP_Text label, string prefix, double value, ref long cachedKey)
         {

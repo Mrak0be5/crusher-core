@@ -259,8 +259,48 @@ namespace Crusher.UI
 
         // Offline Lab Progress Modal
         private RectTransform _offlineModalRoot;
+        private RectTransform _offlineWinRect;
         private CanvasGroup _offlineModalGroup;
         private TextMeshProUGUI _offlineBodyTmp;
+
+        // Adaptive Portrait (1080x2400) / Landscape (1920x1080) Window & Scroll Refs
+        private Image _bgOverlay;
+        private RectTransform _windowRect;
+        private Image _windowBgImg;
+        private bool _isLandscape;
+
+        private RectTransform _topBarRect;
+        private TextMeshProUGUI _topTitleTmp;
+        private readonly RectTransform[] _curPillRects = new RectTransform[4];
+        private Button _muteBtn;
+        private RectTransform _muteBtnRect;
+        private Image _muteBtnBg;
+        private TextMeshProUGUI _muteLabelTmp;
+        private int _cachedMuteState = -1;
+
+        private RectTransform _commandBarRect;
+        private RectTransform _skinBtnRect;
+        private RectTransform _tierBtnRect;
+        private RectTransform _startRunBtnRect;
+
+        private RectTransform _metaStripRect;
+        private readonly RectTransform[] _metaBoxRects = new RectTransform[3];
+        private readonly RectTransform[] _metaCardSlotRects = new RectTransform[BalanceTables.MAX_CARD_SLOTS];
+        private readonly RectTransform[] _metaUwSlotRects = new RectTransform[4];
+
+        private RectTransform _viewportRect;
+        private ScrollRect _scrollRect;
+        private RectTransform _scrollbarRect;
+        private RectTransform _bottomTabBarRect;
+        private readonly RectTransform[] _mainTabIconRects = new RectTransform[MainTabCount];
+
+        private TextMeshProUGUI _eqHdrTmp;
+        private RectTransform _gachaBarRect;
+
+        private static readonly float[] TabContentHeightsPortrait = { 1590f, 1646f, 1664f, 1664f, 1654f };
+        private static readonly float[] TabContentHeightsLandscape = { 1590f, 1520f, 1664f, 1664f, 1654f };
+        private static readonly string[] MainTabTitlesPortrait = { "МАСТЕРСКАЯ", "КАРТЫ", "ЛАБЫ", "УЛЬТЫ", "ВЕХИ" };
+        private static readonly string[] MainTabTitlesLandscape = { "[1] МАСТЕР.", "[2] КАРТЫ", "[3] ЛАБЫ", "[4] УЛЬТЫ", "[5] ВЕХИ" };
 
         public bool IsVisible => _root != null && _root.gameObject.activeSelf;
         public int ActiveTab => _activeTab;
@@ -278,9 +318,16 @@ namespace Crusher.UI
             _onRequestUwModal = onRequestUwModal;
 
             _root = UiFactory.CreateStretchRect("HangarScreen", safeParent);
-            var bgOverlay = _root.gameObject.AddComponent<Image>();
-            bgOverlay.color = new Color(0.04f, 0.06f, 0.09f, 0.78f);
-            bgOverlay.raycastTarget = true;
+            _bgOverlay = _root.gameObject.AddComponent<Image>();
+            _bgOverlay.color = new Color(0.04f, 0.06f, 0.09f, 0.78f);
+            _bgOverlay.raycastTarget = true;
+
+            _windowBgImg = UiFactory.CreateSdfImage(
+                "HangarWindow", _root, _style.MatModalWindow, new Color(0.08f, 0.11f, 0.16f, 0.97f),
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f),
+                Vector2.zero, Vector2.zero, raycast: true);
+            _windowBgImg.enabled = false;
+            _windowRect = _windowBgImg.rectTransform;
 
             BuildTopHeader();
             BuildCommandBar();
@@ -288,8 +335,10 @@ namespace Crusher.UI
             BuildMainTabsAndViewport();
             BuildOfflineModal();
 
+            ApplyLayoutMode(false);
             ApplyMainTabVisuals();
             ApplyWsSubTabVisuals();
+            RefreshMuteVisual(force: true);
         }
 
         public void SetVisible(bool visible, GameSession session = null)
@@ -298,6 +347,11 @@ namespace Crusher.UI
             if (_root.gameObject.activeSelf != visible)
             {
                 _root.gameObject.SetActive(visible);
+            }
+
+            if (visible)
+            {
+                RefreshMuteVisual(force: true);
             }
 
             if (visible && session != null)
@@ -318,6 +372,7 @@ namespace Crusher.UI
             int clamped = Mathf.Clamp(tabIndex, 0, MainTabCount - 1);
             _activeTab = clamped;
             ApplyMainTabVisuals();
+            BindActiveTabToScroll();
         }
 
         public void ShowOfflineSummary(OfflineProgressSummary summary)
@@ -353,16 +408,17 @@ namespace Crusher.UI
         private void BuildTopHeader()
         {
             Image topBg = UiFactory.CreateSdfImage(
-                "HangarTopBar", _root, _style.MatTopHud, new Color(0.10f, 0.14f, 0.20f, 0.96f),
+                "HangarTopBar", _windowRect, _style.MatTopHud, new Color(0.10f, 0.14f, 0.20f, 0.96f),
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, -16f), new Vector2(1040f, 198f));
+            _topBarRect = topBg.rectTransform;
 
-            TextMeshProUGUI title = UiFactory.CreateTmp(
+            _topTitleTmp = UiFactory.CreateTmp(
                 "HangarTitle", topBg.transform, _style.Font, "АНГАР ГИПЕР-ШРЕДЕРА",
                 30f, UiStyle.TextPrimary, TextAlignmentOptions.Left,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
                 new Vector2(22f, -14f), new Vector2(540f, 44f));
-            title.fontStyle = FontStyles.Bold;
+            _topTitleTmp.fontStyle = FontStyles.Bold;
 
             _gradeBadgeTmp = UiFactory.CreateTmp(
                 "CoreGradeBadge", topBg.transform, _style.Font, "ШАССИ G0: БАЗОВЫЙ РОТОР",
@@ -375,8 +431,22 @@ namespace Crusher.UI
                 "RecordBadge", topBg.transform, _style.Font, "РЕКОРД Т1: W0",
                 22f, UiStyle.TextAmber, TextAlignmentOptions.Right,
                 new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-22f, -18f), new Vector2(440f, 42f));
+                new Vector2(-22f, -14f), new Vector2(440f, 36f));
             _recordBadgeTmp.fontStyle = FontStyles.Bold;
+
+            _muteBtn = UiFactory.CreateSdfButton(
+                "HangarMuteBtn", topBg.transform, _style, _style.MatPill, new Color(0.10f, 0.14f, 0.20f, 0.96f),
+                "ЗВУК ВКЛ", 17f, UiStyle.TextCyan,
+                new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
+                new Vector2(-22f, -54f), new Vector2(168f, 40f),
+                () =>
+                {
+                    UiStyle.ToggleMute();
+                    RefreshMuteVisual(force: true);
+                    _tweens.PunchScale(_muteBtnRect, 0.08f, 0.14f);
+                }, out _muteBtnBg, out _muteLabelTmp);
+            _muteBtnRect = _muteBtnBg.rectTransform;
+            _muteLabelTmp.fontStyle = FontStyles.Bold;
 
             // 4 Currency Pills along bottom of TopBar
             _coinsTmp = BuildCurrencyPill(topBg.transform, 0, UiIcons.Coins, UiStyle.TextAmber, "0");
@@ -392,18 +462,19 @@ namespace Crusher.UI
                 "CurPill_" + index, parent, _style.MatPill, new Color(0.08f, 0.11f, 0.16f, 0.95f),
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 new Vector2(startX, 14f), new Vector2(242f, 64f));
+            _curPillRects[index] = pill.rectTransform;
 
             UiFactory.CreateIcon(
                 "Icon", pill.transform, _style.GetIcon(iconId),
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(12f, 0f), new Vector2(44f, 44f));
+                new Vector2(12f, 0f), new Vector2(38f, 38f));
 
             TextMeshProUGUI val = UiFactory.CreateTmp(
                 "Val", pill.transform, _style.Font, initText,
-                25f, textColor, TextAlignmentOptions.Right,
+                24f, textColor, TextAlignmentOptions.Right,
                 new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f),
                 Vector2.zero, Vector2.zero);
-            val.rectTransform.offsetMin = new Vector2(62f, 4f);
+            val.rectTransform.offsetMin = new Vector2(56f, 4f);
             val.rectTransform.offsetMax = new Vector2(-14f, -4f);
             val.fontStyle = FontStyles.Bold;
             return val;
@@ -412,17 +483,19 @@ namespace Crusher.UI
         private void BuildCommandBar()
         {
             RectTransform bar = UiFactory.CreateRect(
-                "CommandBar", _root,
+                "CommandBar", _windowRect,
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, -228f), new Vector2(1040f, 114f));
+            _commandBarRect = bar;
 
-            // 1. Molten Core Skin Toggle (330x114)
+            // 1. Molten Core Skin Toggle (336x114)
             _skinBtn = UiFactory.CreateSdfButton(
                 "SkinBtn", bar, _style, _style.MatCardLocked, new Color(0.12f, 0.15f, 0.20f, 0.95f),
                 "СКИН MOLTEN CORE\nОТКРЫТИЕ: T1 W80", 18f, UiStyle.TextSecondary,
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                 new Vector2(0f, 0f), new Vector2(336f, 114f),
                 OnClickSkinToggle, out _skinBtnBg, out _skinBtnTmp);
+            _skinBtnRect = _skinBtnBg.rectTransform;
             _skinBtnTmp.alignment = TextAlignmentOptions.Left;
             _skinBtnTmp.rectTransform.offsetMin = new Vector2(78f, 8f);
             _skinBtnTmp.rectTransform.offsetMax = new Vector2(-10f, -8f);
@@ -432,7 +505,7 @@ namespace Crusher.UI
             UiFactory.CreateIcon(
                 "SkinIcon", _skinBtnBg.transform, _style.GetIcon(UiIcons.SkinMoltenCore),
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(12f, 0f), new Vector2(56f, 56f));
+                new Vector2(12f, 0f), new Vector2(52f, 52f));
 
             // 2. Tier 1 / Tier 2 Toggle (266x114)
             _tierBtn = UiFactory.CreateSdfButton(
@@ -441,25 +514,28 @@ namespace Crusher.UI
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                 new Vector2(350f, 0f), new Vector2(266f, 114f),
                 OnClickTierToggle, out _tierBtnBg, out _tierBtnTmp);
+            _tierBtnRect = _tierBtnBg.rectTransform;
             _tierBtnTmp.textWrappingMode = TextWrappingModes.Normal;
             _tierBtnTmp.fontStyle = FontStyles.Bold;
 
             // 3. Primary Launch Button: ▶ В БОЙ! (410x114)
             _startRunBtn = UiFactory.CreateSdfButton(
                 "StartRunBtn", bar, _style, _style.MatBuyAmber, UiStyle.TextAmber,
-                "▶ В БОЙ! (ТИР 1)", 30f, UiStyle.TextButtonDark,
+                "▶ В БОЙ! (ТИР 1)", 28f, UiStyle.TextButtonDark,
                 new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
                 new Vector2(0f, 0f), new Vector2(410f, 114f),
-                OnClickStartRun, out _, out _startRunTmp);
+                OnClickStartRun, out Image startBg, out _startRunTmp);
+            _startRunBtnRect = startBg.rectTransform;
             _startRunTmp.fontStyle = FontStyles.Bold;
         }
 
         private void BuildMetaOverviewStrip()
         {
             RectTransform strip = UiFactory.CreateRect(
-                "MetaOverviewStrip", _root,
+                "MetaOverviewStrip", _windowRect,
                 new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, -356f), new Vector2(1040f, 192f));
+            _metaStripRect = strip;
 
             // Column 1: Equipped Cards Summary (338x192)
             Button cardsBox = UiFactory.CreateSdfButton(
@@ -469,6 +545,7 @@ namespace Crusher.UI
                 new Vector2(0f, 0f), new Vector2(338f, 192f),
                 () => SelectMainTabByUser(TabCards), out Image cardsBg, out TextMeshProUGUI empty1);
             empty1.gameObject.SetActive(false);
+            _metaBoxRects[0] = cardsBg.rectTransform;
 
             _metaCardsHeaderTmp = UiFactory.CreateTmp(
                 "Hdr", cardsBg.transform, _style.Font, "КАРТЫ (0/1 СЛ.)",
@@ -484,17 +561,18 @@ namespace Crusher.UI
                     "SlotMini_" + i, cardsBg.transform, _style.MatPill, new Color(0.07f, 0.10f, 0.14f, 0.95f),
                     new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, 0f),
                     new Vector2(x, 16f), new Vector2(70f, 126f));
+                _metaCardSlotRects[i] = slotBg.rectTransform;
 
                 _metaCardIcons[i] = UiFactory.CreateIcon(
                     "Icon", slotBg.transform, _style.GetIcon(UiIcons.TabCards),
                     new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                    new Vector2(0f, -12f), new Vector2(52f, 52f));
+                    new Vector2(0f, -10f), new Vector2(46f, 46f));
 
                 _metaCardStars[i] = UiFactory.CreateTmp(
                     "Stars", slotBg.transform, _style.Font, "—",
-                    16f, UiStyle.TextAmber, TextAlignmentOptions.Center,
+                    15f, UiStyle.TextAmber, TextAlignmentOptions.Center,
                     new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                    new Vector2(0f, 10f), new Vector2(-4f, 42f));
+                    new Vector2(0f, 8f), new Vector2(-4f, 36f));
                 _metaCardStars[i].fontStyle = FontStyles.Bold;
             }
 
@@ -506,6 +584,7 @@ namespace Crusher.UI
                 new Vector2(0f, 0f), new Vector2(338f, 192f),
                 () => SelectMainTabByUser(TabLabs), out Image labsBg, out TextMeshProUGUI empty2);
             empty2.gameObject.SetActive(false);
+            _metaBoxRects[1] = labsBg.rectTransform;
 
             _metaLabsHeaderTmp = UiFactory.CreateTmp(
                 "Hdr", labsBg.transform, _style.Font, "ЛАБОРАТОРИЯ (0/1)",
@@ -539,6 +618,7 @@ namespace Crusher.UI
                 new Vector2(0f, 0f), new Vector2(338f, 192f),
                 () => SelectMainTabByUser(TabUws), out Image uwsBg, out TextMeshProUGUI empty3);
             empty3.gameObject.SetActive(false);
+            _metaBoxRects[2] = uwsBg.rectTransform;
 
             _metaUwsHeaderTmp = UiFactory.CreateTmp(
                 "Hdr", uwsBg.transform, _style.Font, "УЛЬТЫ И ДРОН (0/3)",
@@ -555,30 +635,72 @@ namespace Crusher.UI
                     "UwMini_" + i, uwsBg.transform, _style.MatPill, new Color(0.07f, 0.10f, 0.14f, 0.95f),
                     new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(0f, 0f),
                     new Vector2(x, 16f), new Vector2(70f, 126f));
+                _metaUwSlotRects[i] = cell.rectTransform;
 
                 _metaUwIcons[i] = UiFactory.CreateIcon(
                     "Icon", cell.transform, _style.GetIcon(metaUwIconIds[i]),
                     new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                    new Vector2(0f, -12f), new Vector2(52f, 52f));
+                    new Vector2(0f, -10f), new Vector2(46f, 46f));
 
                 _metaUwBadges[i] = UiFactory.CreateTmp(
                     "Badge", cell.transform, _style.Font, "ЗАКР",
                     15f, UiStyle.TextMuted, TextAlignmentOptions.Center,
                     new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                    new Vector2(0f, 10f), new Vector2(-4f, 42f));
+                    new Vector2(0f, 8f), new Vector2(-4f, 36f));
                 _metaUwBadges[i].fontStyle = FontStyles.Bold;
             }
         }
 
         private void BuildMainTabsAndViewport()
         {
-            // Content Viewport: top = -564, bottom = +160 => height = 1676 px on 1080x2400
-            RectTransform viewport = UiFactory.CreateStretchRect("HangarContentViewport", _root, left: 20f, bottom: 160f, right: 20f, top: 564f);
+            // Content Viewport: top = -564, bottom = +160 => height = 1676 px on 1080x2400 (clamped ScrollRect in 1920x1080)
+            _viewportRect = UiFactory.CreateStretchRect("HangarContentViewport", _windowRect, left: 20f, bottom: 160f, right: 20f, top: 564f);
+            var vpHit = _viewportRect.gameObject.AddComponent<Image>();
+            vpHit.color = new Color(0f, 0f, 0f, 0f);
+            vpHit.raycastTarget = true;
+            _viewportRect.gameObject.AddComponent<RectMask2D>();
+
+            _scrollRect = _viewportRect.gameObject.AddComponent<ScrollRect>();
+            _scrollRect.viewport = _viewportRect;
+            _scrollRect.horizontal = false;
+            _scrollRect.vertical = true;
+            _scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            _scrollRect.scrollSensitivity = 38f;
+            _scrollRect.inertia = true;
+            _scrollRect.decelerationRate = 0.12f;
 
             for (int i = 0; i < MainTabCount; i++)
             {
-                _tabPanels[i] = UiFactory.CreateStretchRect("TabPanel_" + i, viewport);
+                _tabPanels[i] = UiFactory.CreateRect(
+                    "TabPanel_" + i, _viewportRect,
+                    new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
+                    Vector2.zero, new Vector2(0f, TabContentHeightsPortrait[i]));
             }
+
+            // Sleek vertical Scrollbar for 1920x1080 PC WebGL window
+            _scrollbarRect = UiFactory.CreateRect(
+                "HangarScrollbar", _windowRect,
+                new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f),
+                new Vector2(-28f, 0f), new Vector2(12f, 0f));
+            _scrollbarRect.offsetMin = new Vector2(-40f, 112f);
+            _scrollbarRect.offsetMax = new Vector2(-28f, -400f);
+            var sbTrack = _scrollbarRect.gameObject.AddComponent<Image>();
+            sbTrack.color = new Color(0.06f, 0.09f, 0.14f, 0.85f);
+            sbTrack.raycastTarget = true;
+
+            RectTransform slideArea = UiFactory.CreateStretchRect("SlidingArea", _scrollbarRect, 2f, 2f, 2f, 2f);
+            RectTransform handleRt = UiFactory.CreateStretchRect("Handle", slideArea);
+            var handleImg = handleRt.gameObject.AddComponent<Image>();
+            handleImg.color = new Color(0.32f, 0.88f, 1.00f, 0.85f);
+            handleImg.raycastTarget = true;
+
+            var scrollbar = _scrollbarRect.gameObject.AddComponent<Scrollbar>();
+            scrollbar.handleRect = handleRt;
+            scrollbar.targetGraphic = handleImg;
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            _scrollRect.verticalScrollbar = scrollbar;
+            _scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            _scrollbarRect.gameObject.SetActive(false);
 
             BuildWorkshopTab(_tabPanels[TabWorkshop]);
             BuildCardsTab(_tabPanels[TabCards]);
@@ -586,13 +708,15 @@ namespace Crusher.UI
             BuildUwsTab(_tabPanels[TabUws]);
             BuildMilestonesTab(_tabPanels[TabMilestones]);
 
+            _scrollRect.content = _tabPanels[_activeTab];
+
             // Bottom 5-Tab Bar (y = +16..+146 from bottom, aligned with thumb zone & smoke coordinates)
             RectTransform tabBar = UiFactory.CreateRect(
-                "BottomTabBar", _root,
+                "BottomTabBar", _windowRect,
                 new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 new Vector2(0f, 16f), new Vector2(1040f, 130f));
+            _bottomTabBarRect = tabBar;
 
-            string[] titles = { "МАСТЕРСКАЯ", "КАРТЫ", "ЛАБЫ", "УЛЬТЫ", "ВЕХИ" };
             string[] icons = { UiIcons.TabWorkshop, UiIcons.TabCards, UiIcons.TabLabs, UiIcons.TabUw, UiIcons.SkinMoltenCore };
 
             for (int i = 0; i < MainTabCount; i++)
@@ -601,20 +725,21 @@ namespace Crusher.UI
                 float x = i * 210f;
                 UiFactory.CreateSdfButton(
                     "MainTab_" + i, tabBar, _style, _style.MatTabInactive, new Color(0.11f, 0.15f, 0.20f, 0.96f),
-                    titles[i], 19f, UiStyle.TextSecondary,
+                    MainTabTitlesPortrait[i], 19f, UiStyle.TextSecondary,
                     new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                     new Vector2(x, 0f), new Vector2(200f, 128f),
                     () => SelectMainTabByUser(captured), out _mainTabBgs[i], out _mainTabLabels[i]);
 
                 _mainTabLabels[i].alignment = TextAlignmentOptions.Bottom;
-                _mainTabLabels[i].rectTransform.offsetMin = new Vector2(4f, 18f);
-                _mainTabLabels[i].rectTransform.offsetMax = new Vector2(-4f, -64f);
+                _mainTabLabels[i].rectTransform.offsetMin = new Vector2(4f, 22f);
+                _mainTabLabels[i].rectTransform.offsetMax = new Vector2(-4f, -62f);
                 _mainTabLabels[i].fontStyle = FontStyles.Bold;
 
-                UiFactory.CreateIcon(
+                Image iconImg = UiFactory.CreateIcon(
                     "TabIcon", _mainTabBgs[i].transform, _style.GetIcon(icons[i]),
                     new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
                     new Vector2(0f, -12f), new Vector2(52f, 52f));
+                _mainTabIconRects[i] = iconImg.rectTransform;
             }
         }
 
@@ -758,6 +883,7 @@ namespace Crusher.UI
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, 0f), new Vector2(0f, 34f));
             eqHdr.fontStyle = FontStyles.Bold;
+            _eqHdrTmp = eqHdr;
 
             for (int i = 0; i < BalanceTables.MAX_CARD_SLOTS; i++)
             {
@@ -803,6 +929,7 @@ namespace Crusher.UI
                 "GachaBar", panel, _style.MatHeaderStrip, new Color(0.13f, 0.18f, 0.25f, 0.97f),
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
                 new Vector2(0f, -176f), new Vector2(0f, 80f));
+            _gachaBarRect = gachaBar.rectTransform;
 
             _gachaStatusTmp = UiFactory.CreateTmp(
                 "GachaInfo", gachaBar.transform, _style.Font,
@@ -1243,6 +1370,7 @@ namespace Crusher.UI
                 "OfflineWindow", _offlineModalRoot, _style.MatModalWindow, new Color(0.11f, 0.16f, 0.23f, 0.99f),
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 Vector2.zero, new Vector2(860f, 560f), raycast: true);
+            _offlineWinRect = win.rectTransform;
 
             TextMeshProUGUI hdr = UiFactory.CreateTmp(
                 "Title", win.transform, _style.Font, "ОТЧЁТ ЛАБОРАТОРИИ",
@@ -1279,6 +1407,7 @@ namespace Crusher.UI
             if (session == null || _root == null || !_root.gameObject.activeSelf) return;
             _boundSession = session;
 
+            RefreshMuteVisual(force: false);
             TickHeaderAndCurrencies(session);
             TickCommandBar(session);
             TickMetaOverviewStrip(session);
@@ -1350,6 +1479,7 @@ namespace Crusher.UI
             int cmdHash = (session.MoltenCoreSkinUnlocked ? 1 : 0)
                 | (session.MoltenCoreSkinEquipped ? 2 : 0)
                 | (session.Tier2Unlocked ? 4 : 0)
+                | (_isLandscape ? 8 : 0)
                 | (session.ActiveTier << 4);
 
             if (cmdHash == _cachedCmdHash) return;
@@ -1375,7 +1505,7 @@ namespace Crusher.UI
                 _tierBtnBg.material = _style.MatCardEpic;
                 _tierBtnTmp.color = UiStyle.TextAmber;
                 _tierBtnTmp.text = "★ ТИР 2 АКТИВЕН\n×1.8 МОНЕТ (×20 HP)";
-                _startRunTmp.text = "▶ В БОЙ! (ТИР 2)";
+                _startRunTmp.text = _isLandscape ? "▶ В БОЙ! ТИР 2 [Space]" : "▶ В БОЙ! (ТИР 2)";
             }
             else
             {
@@ -1384,7 +1514,7 @@ namespace Crusher.UI
                 _tierBtnTmp.text = session.Tier2Unlocked
                     ? "ТИР 1 • НАЖМИТЕ\nДЛЯ ТИР 2 (×1.8)"
                     : "ТИР 1 • ЦЕХ\nТИР 2 НА W100";
-                _startRunTmp.text = "▶ В БОЙ! (ТИР 1)";
+                _startRunTmp.text = _isLandscape ? "▶ В БОЙ! ТИР 1 [Space]" : "▶ В БОЙ! (ТИР 1)";
             }
         }
 
@@ -2560,6 +2690,295 @@ namespace Crusher.UI
                 UiStyle.PlaySfx(SfxId.UiUnlock);
                 _tweens.PunchScale(_uwWidgets[(int)id].UpgradeBg.rectTransform, 0.10f, 0.18f);
             }
+        }
+
+        public void ApplyLayoutMode(bool isLandscape)
+        {
+            _isLandscape = isLandscape;
+            _cachedCmdHash = int.MinValue;
+            _cachedMuteState = -1;
+
+            if (_windowRect == null) return;
+
+            if (!isLandscape)
+            {
+                // --- PORTRAIT 1080x2400 MOBILE HANGAR ---
+                _bgOverlay.color = new Color(0.04f, 0.06f, 0.09f, 0.78f);
+                _windowBgImg.enabled = false;
+                _windowRect.anchorMin = Vector2.zero;
+                _windowRect.anchorMax = Vector2.one;
+                _windowRect.pivot = new Vector2(0.5f, 0.5f);
+                _windowRect.offsetMin = Vector2.zero;
+                _windowRect.offsetMax = Vector2.zero;
+
+                _topBarRect.anchoredPosition = new Vector2(0f, -16f);
+                _topBarRect.sizeDelta = new Vector2(1040f, 198f);
+                _topTitleTmp.fontSize = 30f;
+                _topTitleTmp.rectTransform.anchoredPosition = new Vector2(22f, -14f);
+                _gradeBadgeTmp.fontSize = 20f;
+                _gradeBadgeTmp.rectTransform.anchoredPosition = new Vector2(22f, -58f);
+                _recordBadgeTmp.fontSize = 22f;
+                _recordBadgeTmp.rectTransform.anchoredPosition = new Vector2(-22f, -14f);
+                _muteBtnRect.anchoredPosition = new Vector2(-22f, -54f);
+                _muteBtnRect.sizeDelta = new Vector2(168f, 40f);
+                _muteLabelTmp.fontSize = 17f;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    _curPillRects[i].anchoredPosition = new Vector2(-381f + i * 254f, 14f);
+                    _curPillRects[i].sizeDelta = new Vector2(242f, 64f);
+                }
+
+                _commandBarRect.anchoredPosition = new Vector2(0f, -228f);
+                _commandBarRect.sizeDelta = new Vector2(1040f, 114f);
+                _skinBtnRect.anchoredPosition = Vector2.zero;
+                _skinBtnRect.sizeDelta = new Vector2(336f, 114f);
+                _tierBtnRect.anchoredPosition = new Vector2(350f, 0f);
+                _tierBtnRect.sizeDelta = new Vector2(266f, 114f);
+                _startRunBtnRect.anchoredPosition = Vector2.zero;
+                _startRunBtnRect.sizeDelta = new Vector2(410f, 114f);
+                _startRunTmp.fontSize = 28f;
+
+                _metaStripRect.anchoredPosition = new Vector2(0f, -356f);
+                _metaStripRect.sizeDelta = new Vector2(1040f, 192f);
+                for (int i = 0; i < 3; i++) _metaBoxRects[i].sizeDelta = new Vector2(338f, 192f);
+                for (int i = 0; i < BalanceTables.MAX_CARD_SLOTS; i++)
+                {
+                    _metaCardSlotRects[i].anchoredPosition = new Vector2(18f + i * 78f, 16f);
+                    _metaCardSlotRects[i].sizeDelta = new Vector2(70f, 126f);
+                }
+                for (int i = 0; i < 4; i++)
+                {
+                    _metaUwSlotRects[i].anchoredPosition = new Vector2(18f + i * 78f, 16f);
+                    _metaUwSlotRects[i].sizeDelta = new Vector2(70f, 126f);
+                }
+                for (int i = 0; i < BalanceTables.MAX_LAB_SLOTS; i++)
+                {
+                    float y = -48f - i * 44f;
+                    _metaLabNames[i].rectTransform.anchoredPosition = new Vector2(14f, y);
+                    _metaLabTimers[i].rectTransform.anchoredPosition = new Vector2(-14f, y);
+                }
+
+                _viewportRect.offsetMin = new Vector2(20f, 160f);
+                _viewportRect.offsetMax = new Vector2(-20f, -564f);
+                _scrollbarRect.gameObject.SetActive(false);
+                _scrollRect.enabled = false;
+
+                for (int i = 0; i < MainTabCount; i++)
+                {
+                    _tabPanels[i].sizeDelta = new Vector2(0f, TabContentHeightsPortrait[i]);
+                    _tabPanels[i].anchoredPosition = Vector2.zero;
+                }
+
+                // Portrait Cards Tab spacing
+                _eqHdrTmp.rectTransform.sizeDelta = new Vector2(0f, 34f);
+                for (int i = 0; i < BalanceTables.MAX_CARD_SLOTS; i++)
+                {
+                    _equipSlots[i].Root.anchoredPosition = new Vector2(i * 264f, -38f);
+                    _equipSlots[i].Root.sizeDelta = new Vector2(248f, 124f);
+                }
+                _gachaBarRect.anchoredPosition = new Vector2(0f, -176f);
+                _gachaBarRect.sizeDelta = new Vector2(0f, 80f);
+                for (int i = 0; i < GameIdsAndScale.CARD_COUNT; i++)
+                {
+                    int col = i % 2;
+                    int row = i / 2;
+                    _cardWidgets[i].Root.anchoredPosition = new Vector2(col * 530f, -272f - row * 342f);
+                    _cardWidgets[i].Root.sizeDelta = new Vector2(510f, 326f);
+                    _cardWidgets[i].Desc.rectTransform.offsetMin = new Vector2(20f, -226f);
+                    _cardWidgets[i].EquipBg.rectTransform.anchoredPosition = new Vector2(0f, 16f);
+                    _cardWidgets[i].EquipBg.rectTransform.sizeDelta = new Vector2(474f, 70f);
+                }
+
+                _bottomTabBarRect.anchoredPosition = new Vector2(0f, 16f);
+                _bottomTabBarRect.sizeDelta = new Vector2(1040f, 130f);
+                for (int i = 0; i < MainTabCount; i++)
+                {
+                    _mainTabBgs[i].rectTransform.anchoredPosition = new Vector2(i * 210f, 0f);
+                    _mainTabBgs[i].rectTransform.sizeDelta = new Vector2(200f, 128f);
+                    _mainTabIconRects[i].anchorMin = new Vector2(0.5f, 1f);
+                    _mainTabIconRects[i].anchorMax = new Vector2(0.5f, 1f);
+                    _mainTabIconRects[i].pivot = new Vector2(0.5f, 1f);
+                    _mainTabIconRects[i].anchoredPosition = new Vector2(0f, -12f);
+                    _mainTabIconRects[i].sizeDelta = new Vector2(52f, 52f);
+                    _mainTabLabels[i].text = MainTabTitlesPortrait[i];
+                    _mainTabLabels[i].fontSize = 19f;
+                    _mainTabLabels[i].alignment = TextAlignmentOptions.Bottom;
+                    _mainTabLabels[i].rectTransform.offsetMin = new Vector2(4f, 22f);
+                    _mainTabLabels[i].rectTransform.offsetMax = new Vector2(-4f, -62f);
+                }
+
+                _offlineWinRect.sizeDelta = new Vector2(860f, 560f);
+            }
+            else
+            {
+                // --- LANDSCAPE 1920x1080 PC WEBGL CENTERED ARMORED WINDOW (1180x1010) ---
+                _bgOverlay.color = new Color(0.02f, 0.04f, 0.07f, 0.36f);
+                _windowBgImg.enabled = true;
+                _windowRect.anchorMin = new Vector2(0.5f, 0.5f);
+                _windowRect.anchorMax = new Vector2(0.5f, 0.5f);
+                _windowRect.pivot = new Vector2(0.5f, 0.5f);
+                _windowRect.anchoredPosition = Vector2.zero;
+                _windowRect.sizeDelta = new Vector2(1180f, 1010f);
+
+                _topBarRect.anchoredPosition = new Vector2(0f, -14f);
+                _topBarRect.sizeDelta = new Vector2(1120f, 136f);
+                _topTitleTmp.fontSize = 25f;
+                _topTitleTmp.rectTransform.anchoredPosition = new Vector2(20f, -10f);
+                _gradeBadgeTmp.fontSize = 18f;
+                _gradeBadgeTmp.rectTransform.anchoredPosition = new Vector2(20f, -44f);
+                _recordBadgeTmp.fontSize = 20f;
+                _recordBadgeTmp.rectTransform.anchoredPosition = new Vector2(-20f, -10f);
+                _muteBtnRect.anchoredPosition = new Vector2(-20f, -44f);
+                _muteBtnRect.sizeDelta = new Vector2(182f, 36f);
+                _muteLabelTmp.fontSize = 16f;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    _curPillRects[i].anchoredPosition = new Vector2(-405f + i * 270f, 10f);
+                    _curPillRects[i].sizeDelta = new Vector2(256f, 48f);
+                }
+
+                _commandBarRect.anchoredPosition = new Vector2(0f, -158f);
+                _commandBarRect.sizeDelta = new Vector2(1120f, 80f);
+                _skinBtnRect.anchoredPosition = Vector2.zero;
+                _skinBtnRect.sizeDelta = new Vector2(360f, 80f);
+                _tierBtnRect.anchoredPosition = new Vector2(372f, 0f);
+                _tierBtnRect.sizeDelta = new Vector2(304f, 80f);
+                _startRunBtnRect.anchoredPosition = Vector2.zero;
+                _startRunBtnRect.sizeDelta = new Vector2(432f, 80f);
+                _startRunTmp.fontSize = 23f;
+
+                _metaStripRect.anchoredPosition = new Vector2(0f, -246f);
+                _metaStripRect.sizeDelta = new Vector2(1120f, 146f);
+                for (int i = 0; i < 3; i++) _metaBoxRects[i].sizeDelta = new Vector2(364f, 146f);
+                for (int i = 0; i < BalanceTables.MAX_CARD_SLOTS; i++)
+                {
+                    _metaCardSlotRects[i].anchoredPosition = new Vector2(20f + i * 84f, 10f);
+                    _metaCardSlotRects[i].sizeDelta = new Vector2(74f, 96f);
+                }
+                for (int i = 0; i < 4; i++)
+                {
+                    _metaUwSlotRects[i].anchoredPosition = new Vector2(20f + i * 84f, 10f);
+                    _metaUwSlotRects[i].sizeDelta = new Vector2(74f, 96f);
+                }
+                for (int i = 0; i < BalanceTables.MAX_LAB_SLOTS; i++)
+                {
+                    float y = -40f - i * 33f;
+                    _metaLabNames[i].rectTransform.anchoredPosition = new Vector2(14f, y);
+                    _metaLabTimers[i].rectTransform.anchoredPosition = new Vector2(-14f, y);
+                }
+
+                // Exact 1040px inner viewport width (1180 - 58 - 82 = 1040) x 498px height + sleek Scrollbar
+                _viewportRect.offsetMin = new Vector2(58f, 110f);
+                _viewportRect.offsetMax = new Vector2(-82f, -402f);
+                _scrollbarRect.offsetMin = new Vector2(-42f, 110f);
+                _scrollbarRect.offsetMax = new Vector2(-28f, -402f);
+                _scrollbarRect.gameObject.SetActive(true);
+                _scrollRect.enabled = true;
+
+                for (int i = 0; i < MainTabCount; i++)
+                {
+                    _tabPanels[i].sizeDelta = new Vector2(0f, TabContentHeightsLandscape[i]);
+                }
+
+                // Compact Cards Tab top so Row 0 of Signature Cards fits 100% unclipped inside 498px viewport
+                _eqHdrTmp.rectTransform.sizeDelta = new Vector2(0f, 26f);
+                for (int i = 0; i < BalanceTables.MAX_CARD_SLOTS; i++)
+                {
+                    _equipSlots[i].Root.anchoredPosition = new Vector2(i * 264f, -30f);
+                    _equipSlots[i].Root.sizeDelta = new Vector2(248f, 96f);
+                }
+                _gachaBarRect.anchoredPosition = new Vector2(0f, -134f);
+                _gachaBarRect.sizeDelta = new Vector2(0f, 64f);
+                for (int i = 0; i < GameIdsAndScale.CARD_COUNT; i++)
+                {
+                    int col = i % 2;
+                    int row = i / 2;
+                    _cardWidgets[i].Root.anchoredPosition = new Vector2(col * 530f, -206f - row * 298f);
+                    _cardWidgets[i].Root.sizeDelta = new Vector2(510f, 286f);
+                    _cardWidgets[i].Desc.rectTransform.offsetMin = new Vector2(20f, -196f);
+                    _cardWidgets[i].EquipBg.rectTransform.anchoredPosition = new Vector2(0f, 12f);
+                    _cardWidgets[i].EquipBg.rectTransform.sizeDelta = new Vector2(474f, 62f);
+                }
+
+                _bottomTabBarRect.anchoredPosition = new Vector2(0f, 14f);
+                _bottomTabBarRect.sizeDelta = new Vector2(1120f, 84f);
+                for (int i = 0; i < MainTabCount; i++)
+                {
+                    _mainTabBgs[i].rectTransform.anchoredPosition = new Vector2(i * 226f, 0f);
+                    _mainTabBgs[i].rectTransform.sizeDelta = new Vector2(216f, 82f);
+                    _mainTabIconRects[i].anchorMin = new Vector2(0f, 0.5f);
+                    _mainTabIconRects[i].anchorMax = new Vector2(0f, 0.5f);
+                    _mainTabIconRects[i].pivot = new Vector2(0f, 0.5f);
+                    _mainTabIconRects[i].anchoredPosition = new Vector2(12f, 0f);
+                    _mainTabIconRects[i].sizeDelta = new Vector2(40f, 40f);
+                    _mainTabLabels[i].text = MainTabTitlesLandscape[i];
+                    _mainTabLabels[i].fontSize = 17.5f;
+                    _mainTabLabels[i].alignment = TextAlignmentOptions.Left;
+                    _mainTabLabels[i].rectTransform.offsetMin = new Vector2(58f, 6f);
+                    _mainTabLabels[i].rectTransform.offsetMax = new Vector2(-8f, -6f);
+                }
+
+                _offlineWinRect.sizeDelta = new Vector2(820f, 520f);
+            }
+
+            BindActiveTabToScroll();
+            RefreshMuteVisual(force: true);
+        }
+
+        private void BindActiveTabToScroll()
+        {
+            if (_scrollRect == null || _tabPanels[_activeTab] == null) return;
+            _scrollRect.content = _tabPanels[_activeTab];
+            _tabPanels[_activeTab].anchoredPosition = Vector2.zero;
+            if (_scrollRect.enabled)
+            {
+                _scrollRect.velocity = Vector2.zero;
+                _scrollRect.verticalNormalizedPosition = 1f;
+            }
+        }
+
+        public void RefreshMuteVisual(bool force)
+        {
+            if (_muteBtnBg == null || _muteLabelTmp == null) return;
+            int state = (UiStyle.IsMuted ? 1 : 0) | (_isLandscape ? 2 : 0);
+            if (!force && state == _cachedMuteState) return;
+            _cachedMuteState = state;
+
+            bool muted = UiStyle.IsMuted;
+            _muteBtnBg.material = muted ? _style.MatTabInactive : _style.MatPill;
+            _muteLabelTmp.color = muted ? UiStyle.TextMuted : UiStyle.TextCyan;
+            if (_isLandscape)
+            {
+                _muteLabelTmp.text = muted ? "[M] ЗВУК ВЫКЛ" : "[M] ЗВУК ВКЛ";
+            }
+            else
+            {
+                _muteLabelTmp.text = muted ? "ЗВУК ВЫКЛ" : "ЗВУК ВКЛ";
+            }
+        }
+
+        public void SelectTabFromHotkey(int index)
+        {
+            if (index >= 0 && index < MainTabCount)
+            {
+                SelectMainTabByUser(index);
+            }
+        }
+
+        public void TriggerCycleWorkshopMultiplier()
+        {
+            if (_activeTab != TabWorkshop) return;
+            UiStyle.PlaySfx(SfxId.UiTap);
+            _wsBuyMultIdx = (_wsBuyMultIdx + 1) % BuyMultipliers.Length;
+            _wsMultBtnTmp.text = BuyMultLabels[_wsBuyMultIdx];
+            InvalidateWorkshopCache();
+        }
+
+        public void TriggerStartRun()
+        {
+            OnClickStartRun();
         }
 
         private static int FindFirstFreeLabSlot(GameSession session)

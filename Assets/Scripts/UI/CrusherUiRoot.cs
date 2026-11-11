@@ -18,13 +18,17 @@ namespace Crusher.UI
     {
         public const int ReferenceWidth = 1080;
         public const int ReferenceHeight = 2400;
+        public const int LandscapeReferenceWidth = 1920;
+        public const int LandscapeReferenceHeight = 1080;
 
         public Canvas MainCanvas { get; private set; }
         public HudScreen Hud => _hud;
         public HangarScreen Hangar => _hangar;
+        public bool IsLandscape => _isLandscape;
 
         private CanvasScaler _scaler;
         private GraphicRaycaster _raycaster;
+        private RectTransform _fullScreenArenaRect;
         private RectTransform _safeAreaRect;
 
         private UiStyle _style;
@@ -38,6 +42,8 @@ namespace Crusher.UI
 
         private bool _isBuilt;
         private bool _offscreenMode;
+        private bool _isLandscape;
+        private bool _orientationInitialized;
         private bool _wasInRun;
         private Rect _lastSafeArea;
         private Vector2Int _lastScreenSize;
@@ -63,13 +69,14 @@ namespace Crusher.UI
                 }
             }
 
-            // Fast idempotent rebind when switching sessions/frames (e.g. OffscreenGate 5-frame capture)
+            // Fast idempotent rebind when switching sessions/frames (e.g. OffscreenGate 9-frame capture)
             if (_isBuilt && MainCanvas != null && _hud != null && _hangar != null && ReferenceEquals(_registry, registry))
             {
                 if (_worldCam != null)
                 {
                     _hud.SetWorldCamera(_worldCam);
                 }
+                EvaluateAndApplyOrientation(force: false);
                 SyncActiveScreenImmediate(session);
                 if (session != null)
                 {
@@ -79,10 +86,11 @@ namespace Crusher.UI
             }
 
             _registry = registry;
+            _orientationInitialized = false;
             CleanupStaleChildren();
             EnsureEventSystemExists();
 
-            // 1. Root 1080x2400 Portrait Canvas
+            // 1. Adaptive Root Canvas (1080x2400 Portrait / 1920x1080 Landscape, matchWidthOrHeight = 0.5)
             var canvasGo = new GameObject("CrusherMainCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasGo.transform.SetParent(transform, false);
 
@@ -101,7 +109,8 @@ namespace Crusher.UI
             _raycaster = canvasGo.GetComponent<GraphicRaycaster>();
             _raycaster.ignoreReversedGraphics = true;
 
-            // 2. Safe-Area Root Container
+            // 2. FullScreenArenaOverlay (outside SafeAreaRoot!) + SafeAreaRoot
+            _fullScreenArenaRect = UiFactory.CreateStretchRect("FullScreenArenaOverlay", canvasGo.transform);
             _safeAreaRect = UiFactory.CreateStretchRect("SafeAreaRoot", canvasGo.transform);
             _lastSafeArea = Rect.zero;
             _lastScreenSize = Vector2Int.zero;
@@ -109,10 +118,12 @@ namespace Crusher.UI
             // 3. Shared ProceduralSDFUI Material Style & Zero-Alloc Tween Pool
             _style = new UiStyle(registry);
             _tweens = new TweenRunner();
+            UiFactory.SetGlobalTweenRunner(_tweens);
 
             // 4. Build Combat HUD + Industrial Hangar + Shared UW Choice Modal
             _hud = new HudScreen();
             _hud.Build(
+                _fullScreenArenaRect,
                 _safeAreaRect,
                 MainCanvas,
                 _style,
@@ -139,7 +150,7 @@ namespace Crusher.UI
             _hud.BringSharedModalsToFront();
 
             _isBuilt = true;
-            UpdateSafeAreaIfNeeded();
+            EvaluateAndApplyOrientation(force: true);
             SyncActiveScreenImmediate(session);
 
             if (session != null)
@@ -155,9 +166,15 @@ namespace Crusher.UI
 
             float dt = Mathf.Clamp(unscaledDt, 0f, 0.25f);
 
+            EvaluateAndApplyOrientation(force: false);
+
             if (!_offscreenMode)
             {
                 UpdateSafeAreaIfNeeded();
+                if (Application.isPlaying)
+                {
+                    ProcessHotkeys(session);
+                }
             }
 
             // Detect natural live-run GameOver transition -> open Run Summary modal
@@ -237,12 +254,8 @@ namespace Crusher.UI
                     _safeAreaRect.offsetMax = Vector2.zero;
                 }
 
-                if (_worldCam == null && _hud != null)
-                {
-                    _worldCam = uiCam;
-                    _hud.SetWorldCamera(uiCam);
-                }
-
+                // Keep _worldCam bound to the 3D Arena Camera so world->overlay projections stay 1:1 concentric!
+                EvaluateAndApplyOrientation(force: false);
                 Canvas.ForceUpdateCanvases();
             }
             else
@@ -251,6 +264,7 @@ namespace Crusher.UI
                 MainCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
                 MainCanvas.worldCamera = null;
                 _lastSafeArea = Rect.zero;
+                EvaluateAndApplyOrientation(force: false);
                 UpdateSafeAreaIfNeeded();
             }
         }
@@ -287,6 +301,125 @@ namespace Crusher.UI
             else
             {
                 _hangar.ShowOfflineSummary(summary);
+            }
+        }
+
+        private void EvaluateAndApplyOrientation(bool force)
+        {
+            if (_scaler == null || _hud == null || _hangar == null) return;
+
+            int sw;
+            int sh;
+            if (MainCanvas != null && MainCanvas.renderMode == RenderMode.ScreenSpaceCamera && MainCanvas.worldCamera != null)
+            {
+                Camera uiCam = MainCanvas.worldCamera;
+                sw = uiCam.targetTexture != null ? uiCam.targetTexture.width : uiCam.pixelWidth;
+                sh = uiCam.targetTexture != null ? uiCam.targetTexture.height : uiCam.pixelHeight;
+            }
+            else if (_worldCam != null && _worldCam.targetTexture != null)
+            {
+                sw = _worldCam.targetTexture.width;
+                sh = _worldCam.targetTexture.height;
+            }
+            else
+            {
+                sw = Screen.width;
+                sh = Screen.height;
+            }
+
+            if (sw <= 0 || sh <= 0)
+            {
+                sw = ReferenceWidth;
+                sh = ReferenceHeight;
+            }
+
+            bool isLandscape = sw > sh * 1.1f;
+            if (!force && _orientationInitialized && isLandscape == _isLandscape)
+            {
+                return;
+            }
+
+            _orientationInitialized = true;
+            _isLandscape = isLandscape;
+            _scaler.referenceResolution = isLandscape
+                ? new Vector2(LandscapeReferenceWidth, LandscapeReferenceHeight)
+                : new Vector2(ReferenceWidth, ReferenceHeight);
+
+            _lastSafeArea = Rect.zero;
+            if (_offscreenMode || isLandscape)
+            {
+                if (_safeAreaRect != null)
+                {
+                    _safeAreaRect.anchorMin = Vector2.zero;
+                    _safeAreaRect.anchorMax = Vector2.one;
+                    _safeAreaRect.offsetMin = Vector2.zero;
+                    _safeAreaRect.offsetMax = Vector2.zero;
+                }
+            }
+            else
+            {
+                UpdateSafeAreaIfNeeded();
+            }
+
+            Canvas.ForceUpdateCanvases();
+            _hud.ApplyLayoutMode(isLandscape);
+            _hangar.ApplyLayoutMode(isLandscape);
+            Canvas.ForceUpdateCanvases();
+        }
+
+        private void ProcessHotkeys(GameSession session)
+        {
+            if (Input.GetKeyDown(KeyCode.M))
+            {
+                UiStyle.ToggleMute();
+                _hud.RefreshMuteVisual(force: true);
+                _hangar.RefreshMuteVisual(force: true);
+            }
+
+            if (Input.GetKeyDown(KeyCode.Tab))
+            {
+                if (_hud.IsSummaryModalOpen)
+                {
+                    _hud.DismissModals();
+                    OpenHangar(0);
+                }
+                else if (session.InRun)
+                {
+                    if (session.WorkshopUnlocked || session.BestWaveT1 >= 10)
+                    {
+                        _hud.TriggerRetreatToHangar();
+                    }
+                    else
+                    {
+                        _hud.ShowToast("Ангар модификаций откроется на Волне 10!", 2.4f);
+                    }
+                }
+                else
+                {
+                    _hangar.TriggerStartRun();
+                }
+                return;
+            }
+
+            if (session.InRun && !_hud.IsSummaryModalOpen)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1)) _hud.SelectCombatTabByIndex(0);
+                else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2)) _hud.SelectCombatTabByIndex(1);
+                else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)) _hud.SelectCombatTabByIndex(2);
+
+                if (Input.GetKeyDown(KeyCode.Q)) _hud.TriggerCycleMultiplier();
+                if (Input.GetKeyDown(KeyCode.Space)) _hud.TriggerCycleSpeed();
+            }
+            else if (!session.InRun && !_hud.IsSummaryModalOpen)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1)) _hangar.SelectTabFromHotkey(0);
+                else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2)) _hangar.SelectTabFromHotkey(1);
+                else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)) _hangar.SelectTabFromHotkey(2);
+                else if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4)) _hangar.SelectTabFromHotkey(3);
+                else if (Input.GetKeyDown(KeyCode.Alpha5) || Input.GetKeyDown(KeyCode.Keypad5)) _hangar.SelectTabFromHotkey(4);
+
+                if (Input.GetKeyDown(KeyCode.Q)) _hangar.TriggerCycleWorkshopMultiplier();
+                if (Input.GetKeyDown(KeyCode.Space)) _hangar.TriggerStartRun();
             }
         }
 
@@ -329,6 +462,19 @@ namespace Crusher.UI
         private void UpdateSafeAreaIfNeeded()
         {
             if (_safeAreaRect == null || _offscreenMode) return;
+
+            if (_isLandscape)
+            {
+                if (_lastSafeArea.width != -1f)
+                {
+                    _lastSafeArea = new Rect(0f, 0f, -1f, -1f);
+                    _safeAreaRect.anchorMin = Vector2.zero;
+                    _safeAreaRect.anchorMax = Vector2.one;
+                    _safeAreaRect.offsetMin = Vector2.zero;
+                    _safeAreaRect.offsetMax = Vector2.zero;
+                }
+                return;
+            }
 
             int sw = Screen.width;
             int sh = Screen.height;

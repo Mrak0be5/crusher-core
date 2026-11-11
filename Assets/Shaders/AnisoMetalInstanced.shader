@@ -140,8 +140,9 @@ Shader "Crusher/AnisoMetalInstanced"
             {
                 if (_UnlitSparkMode > 0.5h)
                 {
-                    half lifeGlow = max(0.15h, (half)input.instData.y);
-                    half3 sparkHDR = input.instCol * (_EmissionBoost * lifeGlow);
+                    half lifeGlow = max(0.18h, (half)input.instData.y);
+                    half hotSpine = (half)saturate(1.0 - length(input.positionOS.xy) * 4.2);
+                    half3 sparkHDR = lerp(input.instCol, half3(2.8h, 2.7h, 2.5h), hotSpine * 0.48h) * (_EmissionBoost * lifeGlow);
                     return half4(sparkHDR, 1.0h);
                 }
 

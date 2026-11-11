@@ -7,6 +7,8 @@ namespace Crusher.UI
 {
     /// <summary>
     /// Pooled <= 6 floating combat damage numbers reading aggregated spatial DamageBuckets from CombatSim.
+    /// Positioned in the FullScreenArenaOverlay (outside SafeAreaRoot) via exact ScreenPointToLocalPointInRectangle
+    /// so numbers align 1:1 with 3D world positions in both 9:20 Portrait and 16:9 Landscape.
     /// Zero GC allocations per frame (writes directly via TMP_Text.SetCharArray).
     /// </summary>
     public sealed class DamageNumberAggregator
@@ -35,14 +37,16 @@ namespace Crusher.UI
         private static readonly Color NormalColor = new Color(0.95f, 0.98f, 1.00f, 1.0f);
         private static readonly Color CritColor = new Color(1.00f, 0.84f, 0.22f, 1.0f);
 
-        public void Build(Transform parent, Canvas canvas, UiStyle style, Camera worldCam)
+        public RectTransform LayerRect => _layerRect;
+
+        public void Build(Transform fullScreenOverlayParent, Canvas canvas, UiStyle style, Camera worldCam)
         {
             _canvas = canvas;
             _worldCam = worldCam;
             _drainTimer = 0f;
             _roundRobinIdx = 0;
 
-            _layerRect = UiFactory.CreateStretchRect("DamageNumbersLayer", parent);
+            _layerRect = UiFactory.CreateStretchRect("DamageNumbersLayer", fullScreenOverlayParent);
 
             for (int i = 0; i < MaxPopups; i++)
             {
@@ -51,7 +55,7 @@ namespace Crusher.UI
                     _layerRect,
                     style.Font,
                     "",
-                    30f,
+                    28f,
                     NormalColor,
                     TextAlignmentOptions.Center,
                     new Vector2(0.5f, 0.5f),
@@ -122,8 +126,7 @@ namespace Crusher.UI
                     continue;
                 }
 
-                // Smooth upward float + punch on spawn + late fade
-                float rise = 74f * (1f - (1f - t) * (1f - t));
+                float rise = 62f * (1f - (1f - t) * (1f - t));
                 s.Rect.anchoredPosition = new Vector2(s.StartPos.x, s.StartPos.y + rise);
 
                 float scale = t < 0.18f
@@ -154,7 +157,7 @@ namespace Crusher.UI
 
                 if (dmg <= 0.05) continue;
 
-                Vector2 localPos = ProjectSimToLayer(sx, sy, 0.85f);
+                Vector2 localPos = ProjectSimToFullScreen(sx, sy, 0.85f);
                 SpawnPopup(localPos, dmg, crit);
             }
         }
@@ -184,7 +187,7 @@ namespace Crusher.UI
             s.StartPos = anchoredPos;
 
             int len = UiFormat.WriteDamagePopupChars(_charScratch, dmg, isCrit);
-            s.Label.fontSize = isCrit ? 36f : 28f;
+            s.Label.fontSize = isCrit ? 34f : 26f;
             s.Label.color = isCrit ? CritColor : NormalColor;
             s.Label.SetCharArray(_charScratch, 0, len);
 
@@ -196,33 +199,14 @@ namespace Crusher.UI
             }
         }
 
-        public Vector2 ProjectSimToLayer(float simX, float simY, float worldHeightY)
+        public Vector2 ProjectSimToFullScreen(float simX, float simY, float worldHeightY)
         {
             Vector3 worldPos = new Vector3(
                 simX * GameIdsAndScale.WORLD_SCALE,
                 worldHeightY,
                 simY * GameIdsAndScale.WORLD_SCALE);
 
-            if (_worldCam != null && _canvas != null && _layerRect != null)
-            {
-                Vector3 vp = _worldCam.WorldToViewportPoint(worldPos);
-                if (vp.z > 0.05f)
-                {
-                    Rect r = _layerRect.rect;
-                    float rw = r.width > 10f ? r.width : 1080f;
-                    float rh = r.height > 10f ? r.height : 2400f;
-                    float lx = (vp.x - 0.5f) * rw;
-                    float ly = (vp.y - 0.5f) * rh;
-                    lx = Mathf.Clamp(lx, -460f, 460f);
-                    ly = Mathf.Clamp(ly, -80f, 980f);
-                    return new Vector2(lx, ly);
-                }
-            }
-
-            // Deterministic fallback centered in upper 58% arena
-            return new Vector2(
-                Mathf.Clamp(simX * 95f, -400f, 400f),
-                Mathf.Clamp(320f + simY * 65f, 40f, 880f));
+            return UiScreenSpace.ProjectWorldToOverlay(_worldCam, _canvas, _layerRect, worldPos);
         }
     }
 }

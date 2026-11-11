@@ -17,6 +17,7 @@ MonoBehaviour:
   MatSdfUi: {fileID: 2100000, guid: 741a32e720d2d0d41a9610403a5e4eca, type: 2}
   IconAtlasTexture: {fileID: 2800000, guid: 07bce6abf7609784d9802679b4ebf35f, type: 3}
   IconAtlasJson: {fileID: 4900000, guid: ff92e53b3d952084fa77032087bc0496, type: 3}
+  PrefabArenaFoundryEnv: {fileID: 919132149155446097, guid: d76eb3623743a5b4989ac67113e7a107, type: 3}
   PrefabShredderCore: {fileID: 919132149155446097, guid: 8f221b7e1610c5443ba9402fd2f7ddd3, type: 3}
   AnimCore: {fileID: 9100000, guid: 05589dd26b94bfe40919e9b892a47673, type: 2}
   PrefabBossAtm: {fileID: 919132149155446097, guid: e4dd591acbeb73146a8ecaeb4878d0d5, type: 3}
@@ -49,6 +50,7 @@ MonoBehaviour:
   - {fileID: -6707926393883692749, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
   - {fileID: 8498925928547088703, guid: 8a982f8e4078fcf46a567bb23bb2b209, type: 3}
   MatArenaFloor: {fileID: 2100000, guid: 0c0a68038e6889546b107831d1be7706, type: 2}
+  MatFoundryEnvLit: {fileID: 2100000, guid: 096b5aec13cc54f46a863f522557b0db, type: 2}
   MatCoreChassis: {fileID: 2100000, guid: 3136b0e2f12c5a24f9502cc517af662c, type: 2}
   MatCoreGrades:
   - {fileID: 2100000, guid: b5c0254b4eacf8c46b7d56c04c054f7a, type: 2}
@@ -72,8 +74,10 @@ MonoBehaviour:
   MatDebrisInstanced: {fileID: 2100000, guid: 9f06a2d220252a04e8bc2e2325a000ba, type: 2}
   MatWeldingSparksInstanced: {fileID: 2100000, guid: d9bf48e8e91dadf49b1b5e9a2b5fb7d0, type: 2}
   MatGoldIngotInstanced: {fileID: 2100000, guid: 72e3905ccbeea124da178b7b830c3d45, type: 2}
+  MatBrassShellInstanced: {fileID: 2100000, guid: a57516710c817ae4e82d99b90c776998, type: 2}
   MatBlackHoleVortex: {fileID: 2100000, guid: 37f95b4712b40674cba65db17eb2a2ec, type: 2}
   MatGoldenBotField: {fileID: 2100000, guid: 3e74bba030ec12b41bc39a135222170f, type: 2}
+  MatShockwaveRing: {fileID: 2100000, guid: 77086e19970b8cf43931451b1f368938, type: 2}
   MatBeamDeathRay: {fileID: 2100000, guid: c770aacefd6d55f419f638ac1d7e1f17, type: 2}
   MatBeamVampireSiphon: {fileID: 2100000, guid: 612a1c0a17283df41b196ab87ab31127, type: 2}
   MatBeamChainZap: {fileID: 2100000, guid: 2d47360a0bc4c9c4b879f686afafe2bb, type: 2}

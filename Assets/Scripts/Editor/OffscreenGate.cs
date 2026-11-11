@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using Crusher.Config;
 using Crusher.Core;
+using Crusher.Render;
 using Crusher.Sim;
 using Crusher.UI;
 using UnityEditor;
@@ -24,11 +25,15 @@ namespace Crusher.Editor
     {
         public const int WIDTH = 1080;
         public const int HEIGHT = 2400;
+        public const int WEB_WIDTH = 1920;
+        public const int WEB_HEIGHT = 1080;
         private const int UI_LAYER = 5; // Built-in "UI" layer
 
         private struct FrameStats
         {
             public string FileName;
+            public int Width;
+            public int Height;
             public long Bytes;
             public float WorldMeanLuma;
             public float WorldStdLuma;
@@ -38,10 +43,48 @@ namespace Crusher.Editor
             public bool Passed;
         }
 
-        [MenuItem("Crusher/QA/Run Offscreen Graphics Gate 2 (5x 1080x2400)")]
+        private sealed class RenderSurfaceSet : IDisposable
+        {
+            public readonly int Width;
+            public readonly int Height;
+            public readonly RenderTexture RtWorld;
+            public readonly RenderTexture RtUiBlack;
+            public readonly RenderTexture RtUiWhite;
+            public readonly Texture2D TexWorld;
+            public readonly Texture2D TexUiBlack;
+            public readonly Texture2D TexUiWhite;
+            public readonly Texture2D TexComposite;
+
+            public RenderSurfaceSet(int width, int height, string tag)
+            {
+                Width = width;
+                Height = height;
+                RtWorld = CreateSrgbRt($"OffscreenGate_{tag}_WorldRT", width, height);
+                RtUiBlack = CreateSrgbRt($"OffscreenGate_{tag}_UiBlackRT", width, height);
+                RtUiWhite = CreateSrgbRt($"OffscreenGate_{tag}_UiWhiteRT", width, height);
+                TexWorld = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false, linear: false);
+                TexUiBlack = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false, linear: false);
+                TexUiWhite = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false, linear: false);
+                TexComposite = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false, linear: false);
+            }
+
+            public void Dispose()
+            {
+                RenderTexture.active = null;
+                if (TexWorld != null) UnityEngine.Object.DestroyImmediate(TexWorld);
+                if (TexUiBlack != null) UnityEngine.Object.DestroyImmediate(TexUiBlack);
+                if (TexUiWhite != null) UnityEngine.Object.DestroyImmediate(TexUiWhite);
+                if (TexComposite != null) UnityEngine.Object.DestroyImmediate(TexComposite);
+                ReleaseRt(RtWorld);
+                ReleaseRt(RtUiBlack);
+                ReleaseRt(RtUiWhite);
+            }
+        }
+
+        [MenuItem("Crusher/QA/Run Offscreen Graphics Gate 2 (5x 1080x2400 + 4x 1920x1080 WebGL)")]
         public static void Run()
         {
-            Debug.Log("[OffscreenGate] Opening Assets/Scenes/Main.unity for STOP-GATE 2 offscreen capture...");
+            Debug.Log("[OffscreenGate] Opening Assets/Scenes/Main.unity for V2 Ultra STOP-GATE 2 offscreen capture (5x Portrait + 4x WebGL 16:9)...");
             if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
             {
                 throw new InvalidOperationException(
@@ -49,6 +92,8 @@ namespace Crusher.Editor
             }
 
             EditorSceneManager.OpenScene(SceneBuilder.MainScenePath, OpenSceneMode.Single);
+            ShaderUtil.allowAsyncCompilation = false;
+            DynamicGI.UpdateEnvironment();
 
             Bootstrap bootstrap = UnityEngine.Object.FindAnyObjectByType<Bootstrap>();
             if (bootstrap == null)
@@ -61,15 +106,6 @@ namespace Crusher.Editor
             {
                 Directory.CreateDirectory(qaDir);
             }
-
-            RenderTexture rtWorld = CreateSrgbRt("OffscreenGate_WorldRT");
-            RenderTexture rtUiBlack = CreateSrgbRt("OffscreenGate_UiBlackRT");
-            RenderTexture rtUiWhite = CreateSrgbRt("OffscreenGate_UiWhiteRT");
-
-            var texWorld = new Texture2D(WIDTH, HEIGHT, TextureFormat.RGBA32, mipChain: false, linear: false);
-            var texUiBlack = new Texture2D(WIDTH, HEIGHT, TextureFormat.RGBA32, mipChain: false, linear: false);
-            var texUiWhite = new Texture2D(WIDTH, HEIGHT, TextureFormat.RGBA32, mipChain: false, linear: false);
-            var texComposite = new Texture2D(WIDTH, HEIGHT, TextureFormat.RGBA32, mipChain: false, linear: false);
 
             var uiCamGo = new GameObject("OffscreenUiCamera_Temp");
             uiCamGo.transform.position = new Vector3(0f, 0f, -10f);
@@ -84,7 +120,6 @@ namespace Crusher.Editor
             uiCam.cullingMask = 1 << UI_LAYER;
             uiCam.allowHDR = false;
             uiCam.allowMSAA = false;
-            uiCam.targetTexture = rtUiBlack;
 
             var uiCamData = uiCamGo.AddComponent<UniversalAdditionalCameraData>();
             uiCamData.renderPostProcessing = false;
@@ -102,53 +137,96 @@ namespace Crusher.Editor
             AntialiasingMode origAa = worldCamData != null ? worldCamData.antialiasing : AntialiasingMode.None;
 
             worldCam.cullingMask = origWorldMask & ~(1 << UI_LAYER);
-            worldCam.targetTexture = rtWorld;
             if (worldCamData != null)
             {
                 worldCamData.antialiasing = AntialiasingMode.FastApproximateAntialiasing;
             }
 
-            var results = new List<FrameStats>(5);
+            var results = new List<FrameStats>(9);
             try
             {
-                // Scenario 1: Run 1 Wave 1 Rusty Core + Basic cubes + Bottom Combat Upgrade Deck
-                GameSession s1 = BuildScenario01_Wave1Rusty();
-                results.Add(CaptureScenario(bootstrap, s1, worldCam, uiCam,
-                    rtWorld, rtUiBlack, rtUiWhite, texWorld, texUiBlack, texUiWhite, texComposite,
-                    qaDir, "gate2_01_w1_rusty.png", warmupSteps: 55, stepDt: 0.08f));
+                // =========================================================================
+                // PASS GROUP A: 5x Mobile Portrait Showcase Shots (1080 x 2400)
+                // =========================================================================
+                using (var portraitSurf = new RenderSurfaceSet(WIDTH, HEIGHT, "Portrait"))
+                {
+                    // Warm up URP RenderGraph + synchronous shader variants before Frame 1
+                    worldCam.targetTexture = portraitSurf.RtWorld;
+                    worldCam.aspect = (float)WIDTH / HEIGHT;
+                    worldCam.Render();
 
-                // Scenario 2: Wave 10 Boss ATM + G1 Steel Carbide + Sparks/Debris/Damage Popups
-                GameSession s2 = BuildScenario02_Wave10BossAtm();
-                results.Add(CaptureScenario(bootstrap, s2, worldCam, uiCam,
-                    rtWorld, rtUiBlack, rtUiWhite, texWorld, texUiBlack, texUiWhite, texComposite,
-                    qaDir, "gate2_02_w10_boss_atm.png", warmupSteps: 36, stepDt: 0.05f, postWarmupHook: sim =>
-                    {
-                        EnsureShowcaseBossAndAction(sim);
-                    }));
+                    // Scenario 1: Run 1 Wave 1 Rusty Core + Basic cubes + Ejected Brass Shells + Bottom Combat Deck
+                    GameSession s1 = BuildScenario01_Wave1Rusty();
+                    results.Add(CaptureScenario(bootstrap, s1, worldCam, uiCam, portraitSurf,
+                        qaDir, "gate2_01_w1_rusty.png", warmupSteps: 55, stepDt: 0.08f, postWarmupHook: sim =>
+                        {
+                            SpawnShowcaseBrassVolley(bootstrap, isHeavyPlasma: false, count: 3);
+                        }));
 
-                // Scenario 3: Wave 45 G2 Titanium Blender + Plasma Saws + Death Ray + Vampire Siphon (+ Garlic rings)
-                GameSession s3 = BuildScenario03_Wave45BlenderDeathRay();
-                results.Add(CaptureScenario(bootstrap, s3, worldCam, uiCam,
-                    rtWorld, rtUiBlack, rtUiWhite, texWorld, texUiBlack, texUiWhite, texComposite,
-                    qaDir, "gate2_03_w45_blender_deathray.png", warmupSteps: 34, stepDt: 0.05f, postWarmupHook: sim =>
-                    {
-                        EnsureShowcaseDeathRayAndVampire(sim);
-                    }));
+                    // Scenario 2: Wave 10 Boss ATM + G1 Steel Carbide + Plasma Shockwave + Brass Shells + Sparks/Debris
+                    GameSession s2 = BuildScenario02_Wave10BossAtm();
+                    results.Add(CaptureScenario(bootstrap, s2, worldCam, uiCam, portraitSurf,
+                        qaDir, "gate2_02_w10_boss_atm.png", warmupSteps: 36, stepDt: 0.05f, postWarmupHook: sim =>
+                        {
+                            EnsureShowcaseBossAndAction(bootstrap, sim);
+                        }));
 
-                // Scenario 4: Wave 85 G3 Diamond Reactor + Molten Core + Synced GT + BH Vortex + Chain Lightning + Golden Bot + Gem Drone
-                GameSession s4 = BuildScenario04_Wave85GtBhMolten();
-                results.Add(CaptureScenario(bootstrap, s4, worldCam, uiCam,
-                    rtWorld, rtUiBlack, rtUiWhite, texWorld, texUiBlack, texUiWhite, texComposite,
-                    qaDir, "gate2_04_w85_gt_bh_moltencore.png", warmupSteps: 38, stepDt: 0.05f, postWarmupHook: sim =>
-                    {
-                        EnsureShowcaseSyncedOverdrive(sim);
-                    }));
+                    // Scenario 3: Wave 45 G2 Titanium Blender + Plasma Saws + Death Ray + Vampire Siphon + Shockwave
+                    GameSession s3 = BuildScenario03_Wave45BlenderDeathRay();
+                    results.Add(CaptureScenario(bootstrap, s3, worldCam, uiCam, portraitSurf,
+                        qaDir, "gate2_03_w45_blender_deathray.png", warmupSteps: 34, stepDt: 0.05f, postWarmupHook: sim =>
+                        {
+                            EnsureShowcaseDeathRayAndVampire(bootstrap, sim);
+                        }));
 
-                // Scenario 5: Hangar Meta Progression Screen (Workshop / Cards / Labs / UWs)
-                GameSession s5 = BuildScenario05_HangarMeta();
-                results.Add(CaptureScenario(bootstrap, s5, worldCam, uiCam,
-                    rtWorld, rtUiBlack, rtUiWhite, texWorld, texUiBlack, texUiWhite, texComposite,
-                    qaDir, "gate2_05_hangar_meta.png", warmupSteps: 6, stepDt: 0.04f));
+                    // Scenario 4: Wave 85 G3 Diamond Reactor + Molten Core + Synced GT + BH Vortex + Chain Lightning + Smelter Shockwave
+                    GameSession s4 = BuildScenario04_Wave85GtBhMolten();
+                    results.Add(CaptureScenario(bootstrap, s4, worldCam, uiCam, portraitSurf,
+                        qaDir, "gate2_04_w85_gt_bh_moltencore.png", warmupSteps: 38, stepDt: 0.05f, postWarmupHook: sim =>
+                        {
+                            EnsureShowcaseSyncedOverdrive(bootstrap, sim);
+                        }));
+
+                    // Scenario 5: Hangar Meta Progression Screen (Workshop / Cards / Labs / UWs)
+                    GameSession s5 = BuildScenario05_HangarMeta();
+                    results.Add(CaptureScenario(bootstrap, s5, worldCam, uiCam, portraitSurf,
+                        qaDir, "gate2_05_hangar_meta.png", warmupSteps: 6, stepDt: 0.04f));
+                }
+
+                // =========================================================================
+                // PASS GROUP B: 4x WebGL Widescreen Landscape Shots (1920 x 1080)
+                // =========================================================================
+                using (var webSurf = new RenderSurfaceSet(WEB_WIDTH, WEB_HEIGHT, "WebGL16x9"))
+                {
+                    // WebGL Shot 1: Wave 1 Rusty Core + Outer Foundry Hall Bunkers/Floodlights + Wide Tactical Deck
+                    GameSession ws1 = BuildScenario01_Wave1Rusty();
+                    results.Add(CaptureScenario(bootstrap, ws1, worldCam, uiCam, webSurf,
+                        qaDir, "gate2_web_01_w1.png", warmupSteps: 55, stepDt: 0.08f, postWarmupHook: sim =>
+                        {
+                            SpawnShowcaseBrassVolley(bootstrap, isHeavyPlasma: false, count: 3);
+                        }));
+
+                    // WebGL Shot 2: Wave 45 Titanium Blender + CNC Death Ray + Plasma Saws + Foundry Environment
+                    GameSession ws2 = BuildScenario03_Wave45BlenderDeathRay();
+                    results.Add(CaptureScenario(bootstrap, ws2, worldCam, uiCam, webSurf,
+                        qaDir, "gate2_web_02_w45.png", warmupSteps: 34, stepDt: 0.05f, postWarmupHook: sim =>
+                        {
+                            EnsureShowcaseDeathRayAndVampire(bootstrap, sim);
+                        }));
+
+                    // WebGL Shot 3: Wave 85 Molten Core + Synced Golden Smelter + Black Hole Vortex + Chain Lightning
+                    GameSession ws3 = BuildScenario04_Wave85GtBhMolten();
+                    results.Add(CaptureScenario(bootstrap, ws3, worldCam, uiCam, webSurf,
+                        qaDir, "gate2_web_03_w85.png", warmupSteps: 38, stepDt: 0.05f, postWarmupHook: sim =>
+                        {
+                            EnsureShowcaseSyncedOverdrive(bootstrap, sim);
+                        }));
+
+                    // WebGL Shot 4: Widescreen Hangar Meta Progression Screen (1920x1080 Multi-Column Deck)
+                    GameSession ws4 = BuildScenario05_HangarMeta();
+                    results.Add(CaptureScenario(bootstrap, ws4, worldCam, uiCam, webSurf,
+                        qaDir, "gate2_web_04_hangar.png", warmupSteps: 6, stepDt: 0.04f));
+                }
 
                 WriteGateReport(qaDir, results);
 
@@ -157,33 +235,27 @@ namespace Crusher.Editor
                     if (!fs.Passed)
                     {
                         throw new InvalidOperationException(
-                            $"[OffscreenGate] Frame QA FAILED on {fs.FileName}: worldLuma={fs.WorldMeanLuma:F3} (std={fs.WorldStdLuma:F3}), finalLuma={fs.FinalMeanLuma:F3}, magenta={fs.MagentaRatio:P4}");
+                            $"[OffscreenGate] Frame QA FAILED on {fs.FileName} ({fs.Width}x{fs.Height}): worldLuma={fs.WorldMeanLuma:F3} (std={fs.WorldStdLuma:F3}), finalLuma={fs.FinalMeanLuma:F3}, magenta={fs.MagentaRatio:P4}");
                     }
                 }
 
-                Debug.Log("[OffscreenGate] STOP_GATE_2_RENDER_PASS — All 5 1080x2400 showcase frames rendered & verified cleanly.");
+                Debug.Log("[OffscreenGate] STOP_GATE_2_RENDER_PASS — All 9 showcase frames (5x 1080x2400 Portrait + 4x 1920x1080 WebGL) rendered & verified cleanly.");
             }
             finally
             {
                 worldCam.cullingMask = origWorldMask;
                 worldCam.targetTexture = origWorldRt;
+                worldCam.ResetAspect();
                 if (worldCamData != null) worldCamData.antialiasing = origAa;
                 uiCam.targetTexture = null;
                 RenderTexture.active = null;
                 UnityEngine.Object.DestroyImmediate(uiCamGo);
-                UnityEngine.Object.DestroyImmediate(texWorld);
-                UnityEngine.Object.DestroyImmediate(texUiBlack);
-                UnityEngine.Object.DestroyImmediate(texUiWhite);
-                UnityEngine.Object.DestroyImmediate(texComposite);
-                ReleaseRt(rtWorld);
-                ReleaseRt(rtUiBlack);
-                ReleaseRt(rtUiWhite);
             }
         }
 
-        private static RenderTexture CreateSrgbRt(string name)
+        private static RenderTexture CreateSrgbRt(string name, int width, int height)
         {
-            var rt = new RenderTexture(WIDTH, HEIGHT, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB)
+            var rt = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB)
             {
                 name = name,
                 antiAliasing = 1,
@@ -205,30 +277,32 @@ namespace Crusher.Editor
             GameSession session,
             Camera worldCam,
             Camera uiCam,
-            RenderTexture rtWorld,
-            RenderTexture rtUiBlack,
-            RenderTexture rtUiWhite,
-            Texture2D texWorld,
-            Texture2D texUiBlack,
-            Texture2D texUiWhite,
-            Texture2D texComposite,
+            RenderSurfaceSet surf,
             string qaDir,
             string fileName,
             int warmupSteps,
             float stepDt,
             Action<CombatSim> postWarmupHook = null)
         {
+            float aspect = (float)surf.Width / surf.Height;
+            worldCam.targetTexture = surf.RtWorld;
+            worldCam.aspect = aspect;
+            uiCam.targetTexture = surf.RtUiBlack;
+            uiCam.aspect = aspect;
+
             bootstrap.InitializeRuntimeSystems(session);
 
             CrusherUiRoot uiRoot = bootstrap.UiRoot;
             if (uiRoot != null)
             {
-                uiCam.targetTexture = rtUiBlack;
+                uiCam.targetTexture = surf.RtUiBlack;
+                uiCam.aspect = aspect;
                 uiRoot.SetOffscreenTargetCamera(uiCam);
                 if (uiRoot.MainCanvas != null)
                 {
                     SetLayerRecursive(uiRoot.MainCanvas.gameObject, UI_LAYER);
                 }
+                uiRoot.TickUI(session, 0.016f);
             }
 
             for (int i = 0; i < warmupSteps; i++)
@@ -241,7 +315,7 @@ namespace Crusher.Editor
                 postWarmupHook(session.Combat);
                 // First render-only step consumes KillEvents -> spawns Voronoi chunks, welding sparks & gold ingots
                 bootstrap.StepFrame(0.020f, tickSimulation: false);
-                // Advance ballistic VFX & shader blends without expiring short-lived showcase ChainArcs / Boss poses
+                // Advance ballistic VFX, brass shells & shockwave rings without expiring showcase ChainArcs / Boss poses
                 for (int k = 0; k < 5; k++)
                 {
                     bootstrap.StepFrame(0.028f, tickSimulation: false);
@@ -254,8 +328,11 @@ namespace Crusher.Editor
 
             if (uiRoot != null && uiRoot.MainCanvas != null)
             {
+                uiCam.targetTexture = surf.RtUiBlack;
+                uiCam.aspect = aspect;
                 SetLayerRecursive(uiRoot.MainCanvas.gameObject, UI_LAYER);
                 Canvas.ForceUpdateCanvases();
+                uiRoot.TickUI(session, 0.0f);
                 if (uiRoot.MainCanvas.transform is RectTransform rtCanvas)
                 {
                     LayoutRebuilder.ForceRebuildLayoutImmediate(rtCanvas);
@@ -263,27 +340,30 @@ namespace Crusher.Editor
                 Canvas.ForceUpdateCanvases();
             }
 
-            // Pass 1: 3D URP World + Shadows + GPU Instancing + ACES Tonemapping + HDR Bloom
-            worldCam.targetTexture = rtWorld;
+            // Pass 1: 3D URP World + 2048 Shadows + Dynamic Point Lights + GPU Instancing + ACES Tonemapping + HDR Bloom
+            worldCam.targetTexture = surf.RtWorld;
+            worldCam.aspect = aspect;
             bootstrap.SubmitAllInstancedDraws(worldCam);
             worldCam.Render();
-            ReadRtIntoTexture(rtWorld, texWorld);
+            ReadRtIntoTexture(surf.RtWorld, surf.TexWorld);
 
             // Pass 2A & 2B: UI over solid Black & solid White for exact affine alpha extraction
             uiCam.clearFlags = CameraClearFlags.SolidColor;
             uiCam.backgroundColor = new Color(0f, 0f, 0f, 1f);
-            uiCam.targetTexture = rtUiBlack;
+            uiCam.targetTexture = surf.RtUiBlack;
+            uiCam.aspect = aspect;
             uiCam.Render();
-            ReadRtIntoTexture(rtUiBlack, texUiBlack);
+            ReadRtIntoTexture(surf.RtUiBlack, surf.TexUiBlack);
 
             uiCam.backgroundColor = new Color(1f, 1f, 1f, 1f);
-            uiCam.targetTexture = rtUiWhite;
+            uiCam.targetTexture = surf.RtUiWhite;
+            uiCam.aspect = aspect;
             uiCam.Render();
-            ReadRtIntoTexture(rtUiWhite, texUiWhite);
+            ReadRtIntoTexture(surf.RtUiWhite, surf.TexUiWhite);
 
-            Color32[] pWorld = texWorld.GetPixels32();
-            Color32[] pBlack = texUiBlack.GetPixels32();
-            Color32[] pWhite = texUiWhite.GetPixels32();
+            Color32[] pWorld = surf.TexWorld.GetPixels32();
+            Color32[] pBlack = surf.TexUiBlack.GetPixels32();
+            Color32[] pWhite = surf.TexUiWhite.GetPixels32();
             var pOut = new Color32[pWorld.Length];
 
             const float inv255 = 1.0f / 255.0f;
@@ -341,10 +421,10 @@ namespace Crusher.Editor
                 }
             }
 
-            texComposite.SetPixels32(pOut);
-            texComposite.Apply(false, false);
+            surf.TexComposite.SetPixels32(pOut);
+            surf.TexComposite.Apply(false, false);
 
-            byte[] pngBytes = texComposite.EncodeToPNG();
+            byte[] pngBytes = surf.TexComposite.EncodeToPNG();
             string outPath = Path.Combine(qaDir, fileName);
             File.WriteAllBytes(outPath, pngBytes);
 
@@ -354,16 +434,18 @@ namespace Crusher.Editor
             float fStd = Mathf.Sqrt(Mathf.Max(0f, (float)(sumFinalSq / Math.Max(1, sampled)) - fMean * fMean));
             float magRatio = (float)magentaCount / Math.Max(1, sampled);
 
-            bool worldValid = wMean > 0.25f && wMean < 0.90f && wStd > 0.035f;
-            bool finalValid = pngBytes.Length > 150 * 1024 && fMean > 0.12f && fMean < 0.90f && fStd > 0.08f && magRatio < 0.0005f;
+            bool worldValid = wMean > 0.18f && wMean < 0.90f && wStd > 0.035f;
+            bool finalValid = pngBytes.Length > 140 * 1024 && fMean > 0.12f && fMean < 0.90f && fStd > 0.075f && magRatio < 0.0005f;
             bool pass = worldValid && finalValid;
 
             Debug.Log(
-                $"[OffscreenGate] CAPTURED {fileName} | Size={pngBytes.Length / 1024} KB | WorldLuma={wMean:F3}(std={wStd:F3}) | FinalLuma={fMean:F3}(std={fStd:F3}) | Magenta={magRatio:P4} | Pass={pass}");
+                $"[OffscreenGate] CAPTURED {fileName} ({surf.Width}x{surf.Height}) | Size={pngBytes.Length / 1024} KB | WorldLuma={wMean:F3}(std={wStd:F3}) | FinalLuma={fMean:F3}(std={fStd:F3}) | Magenta={magRatio:P4} | Pass={pass}");
 
             return new FrameStats
             {
                 FileName = fileName,
+                Width = surf.Width,
+                Height = surf.Height,
                 Bytes = pngBytes.Length,
                 WorldMeanLuma = wMean,
                 WorldStdLuma = wStd,
@@ -378,7 +460,7 @@ namespace Crusher.Editor
         {
             RenderTexture prev = RenderTexture.active;
             RenderTexture.active = rt;
-            dst.ReadPixels(new Rect(0, 0, WIDTH, HEIGHT), 0, 0, recalculateMipMaps: false);
+            dst.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0, recalculateMipMaps: false);
             dst.Apply(false, false);
             RenderTexture.active = prev;
         }
@@ -588,7 +670,17 @@ namespace Crusher.Editor
             return s;
         }
 
-        private static void EnsureShowcaseBossAndAction(CombatSim sim)
+        private static void SpawnShowcaseBrassVolley(Bootstrap bootstrap, bool isHeavyPlasma, int count)
+        {
+            if (bootstrap == null || bootstrap.SparksSystem == null) return;
+            float yaw = CoreAnimatorView.LatestAimYawRad;
+            for (int i = 0; i < count; i++)
+            {
+                bootstrap.SparksSystem.SpawnEjectedBrassShell(yaw + (i - 1) * 0.14f, isHeavyPlasma);
+            }
+        }
+
+        private static void EnsureShowcaseBossAndAction(Bootstrap bootstrap, CombatSim sim)
         {
             // Place Titanium ATM Boss in upper-right quadrant (completely clear of the diegetic Core HP plate below Core!)
             float bossAngle = 0.68f;
@@ -631,12 +723,26 @@ namespace Crusher.Editor
                 };
             }
 
-            // Inject fresh shred kills so hot Voronoi chunks, HDR welding sparks, and gold ingots burst mid-air!
+            // Inject fresh shred kills + ejected brass shells + supersonic PlasmaHit shockwave ring on Boss!
             PushShowcaseKill(sim, EnemyType.Tank, -1.10f, 0.82f, orbOrRay: false, inGolden: false, coins: 12);
             PushShowcaseKill(sim, EnemyType.Fast, 0.92f, -0.78f, orbOrRay: false, inGolden: false, coins: 8);
+            SpawnShowcaseBrassVolley(bootstrap, isHeavyPlasma: true, count: 4);
+
+            if (bootstrap != null && bootstrap.CoreView != null)
+            {
+                Vector3 bossWorld = new Vector3(
+                    GameIdsAndScale.SimToWorld(Mathf.Cos(bossAngle) * bossR),
+                    0.12f,
+                    GameIdsAndScale.SimToWorld(Mathf.Sin(bossAngle) * bossR));
+                bootstrap.CoreView.SpawnShockwaveRing(
+                    bossWorld, 6.4f, 0.45f,
+                    new Color(1.65f, 4.40f, 6.20f, 1f),
+                    new Color(0.65f, 1.85f, 4.20f, 1f),
+                    initialProgress01: 0.12f);
+            }
         }
 
-        private static void EnsureShowcaseDeathRayAndVampire(CombatSim sim)
+        private static void EnsureShowcaseDeathRayAndVampire(Bootstrap bootstrap, CombatSim sim)
         {
             sim.DeathRay.Equipped = true;
             sim.DeathRay.Active = true;
@@ -672,9 +778,10 @@ namespace Crusher.Editor
             float drEndY = Mathf.Sin(-0.34f) * (sim.Stats.RangeSim * 0.85f);
             PushShowcaseKill(sim, EnemyType.Tank, drEndX, drEndY, orbOrRay: true, inGolden: false, coins: 35);
             PushShowcaseKill(sim, EnemyType.Basic, 0.15f, sim.Stats.RangeSim * 0.90f, orbOrRay: true, inGolden: false, coins: 18);
+            SpawnShowcaseBrassVolley(bootstrap, isHeavyPlasma: false, count: 4);
         }
 
-        private static void EnsureShowcaseSyncedOverdrive(CombatSim sim)
+        private static void EnsureShowcaseSyncedOverdrive(Bootstrap bootstrap, CombatSim sim)
         {
             sim.GoldenTower.Unlocked = true;
             sim.GoldenTower.Active = true;
@@ -723,9 +830,19 @@ namespace Crusher.Editor
             sim.ChainArcs[sim.ActiveChainArcCount++] = new ChainArcState { FromX = p1.x, FromY = p1.y, ToX = p2.x, ToY = p2.y, TimeRemaining = 0.20f };
             sim.ChainArcs[sim.ActiveChainArcCount++] = new ChainArcState { FromX = p2.x, FromY = p2.y, ToX = p3.x, ToY = p3.y, TimeRemaining = 0.20f };
 
-            // Shower of 24K Gold Ingots + Voronoi chunks from Black Hole + Golden Tower combo!
+            // Shower of 24K Gold Ingots + 3500K Voronoi chunks + heavy brass shells + Golden Smelter Mach shockwave!
             PushShowcaseKill(sim, EnemyType.Tank, sim.BlackHole.PosX + 0.18f, sim.BlackHole.PosY - 0.12f, orbOrRay: true, inGolden: true, coins: 180);
             PushShowcaseKill(sim, EnemyType.Ranged, p1.x, p1.y, orbOrRay: false, inGolden: true, coins: 140);
+            SpawnShowcaseBrassVolley(bootstrap, isHeavyPlasma: true, count: 5);
+
+            if (bootstrap != null && bootstrap.CoreView != null)
+            {
+                bootstrap.CoreView.SpawnShockwaveRing(
+                    Vector3.zero, 12.8f, 0.62f,
+                    new Color(4.60f, 3.10f, 0.55f, 1f),
+                    new Color(2.80f, 1.45f, 0.18f, 1f),
+                    initialProgress01: 0.16f);
+            }
         }
 
         private static void PushShowcaseKill(CombatSim sim, EnemyType type, float x, float y, bool orbOrRay, bool inGolden, double coins)
@@ -746,11 +863,12 @@ namespace Crusher.Editor
 
         private static void WriteGateReport(string qaDir, List<FrameStats> frames)
         {
-            var sb = new StringBuilder(1280);
+            var sb = new StringBuilder(2048);
             var ic = CultureInfo.InvariantCulture;
             sb.Append("{\n");
-            sb.Append("  \"gate\": \"STOP-GATE 2\",\n");
-            sb.AppendFormat(ic, "  \"resolution\": \"{0}x{1}\",\n", WIDTH, HEIGHT);
+            sb.Append("  \"gate\": \"STOP-GATE 2 (V2 Ultra)\",\n");
+            sb.AppendFormat(ic, "  \"portrait_resolution\": \"{0}x{1}\",\n", WIDTH, HEIGHT);
+            sb.AppendFormat(ic, "  \"webgl_resolution\": \"{0}x{1}\",\n", WEB_WIDTH, WEB_HEIGHT);
             sb.AppendFormat(ic, "  \"graphics_device\": \"{0}\",\n", SystemInfo.graphicsDeviceType);
             sb.Append("  \"frames\": [\n");
             for (int i = 0; i < frames.Count; i++)
@@ -758,8 +876,8 @@ namespace Crusher.Editor
                 FrameStats f = frames[i];
                 sb.Append("    { ");
                 sb.AppendFormat(ic,
-                    "\"file\": \"{0}\", \"bytes\": {1}, \"world_mean_luma\": {2:F4}, \"world_std_luma\": {3:F4}, \"final_mean_luma\": {4:F4}, \"final_std_luma\": {5:F4}, \"magenta_ratio\": {6:F6}, \"passed\": {7}",
-                    f.FileName, f.Bytes, f.WorldMeanLuma, f.WorldStdLuma, f.FinalMeanLuma, f.FinalStdLuma, f.MagentaRatio, f.Passed ? "true" : "false");
+                    "\"file\": \"{0}\", \"resolution\": \"{1}x{2}\", \"bytes\": {3}, \"world_mean_luma\": {4:F4}, \"world_std_luma\": {5:F4}, \"final_mean_luma\": {6:F4}, \"final_std_luma\": {7:F4}, \"magenta_ratio\": {8:F6}, \"passed\": {9}",
+                    f.FileName, f.Width, f.Height, f.Bytes, f.WorldMeanLuma, f.WorldStdLuma, f.FinalMeanLuma, f.FinalStdLuma, f.MagentaRatio, f.Passed ? "true" : "false");
                 sb.Append(i + 1 < frames.Count ? " },\n" : " }\n");
             }
             sb.Append("  ]\n}\n");

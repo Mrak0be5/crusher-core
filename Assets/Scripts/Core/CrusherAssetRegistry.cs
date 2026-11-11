@@ -19,7 +19,8 @@ namespace Crusher.Core
         public Texture2D IconAtlasTexture;
         public TextAsset IconAtlasJson;
 
-        [Header("Skeletal Models & Animator Controllers")]
+        [Header("Skeletal & Environment Models")]
+        public GameObject PrefabArenaFoundryEnv;
         public GameObject PrefabShredderCore;
         public RuntimeAnimatorController AnimCore;
 
@@ -48,6 +49,7 @@ namespace Crusher.Core
 
         [Header("Arena & Skeletal Materials")]
         public Material MatArenaFloor;
+        public Material MatFoundryEnvLit;
         public Material MatCoreChassis;
         public Material[] MatCoreGrades; // [0..3] G0_Rusty .. G3_DiamondReactor
         public Material MatBossAtm;
@@ -63,10 +65,12 @@ namespace Crusher.Core
         public Material MatDebrisInstanced;
         public Material MatWeldingSparksInstanced;
         public Material MatGoldIngotInstanced;
+        public Material MatBrassShellInstanced;
 
-        [Header("VFX Field & Beam Materials")]
+        [Header("VFX Field, Shockwave & Beam Materials")]
         public Material MatBlackHoleVortex;
         public Material MatGoldenBotField;
+        public Material MatShockwaveRing;
         public Material MatBeamDeathRay;
         public Material MatBeamVampireSiphon;
         public Material MatBeamChainZap;
