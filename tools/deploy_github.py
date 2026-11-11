@@ -211,7 +211,7 @@ def publish_release_apk():
         notes_path = tf.name
 
     try:
-        rc, _ = run_cmd([GH_EXE, "release", "view", RELEASE_TAG, "--repo", REPO_SLUG], check=False)
+        rc, rel_json = run_cmd([GH_EXE, "release", "view", RELEASE_TAG, "--repo", REPO_SLUG, "--json", "assets"], check=False)
         if rc != 0:
             run_cmd(
                 [
@@ -231,7 +231,10 @@ def publish_release_apk():
                 ]
             )
         else:
-            run_cmd([GH_EXE, "release", "upload", RELEASE_TAG, APK_REL_PATH, "--repo", REPO_SLUG, "--clobber"])
+            assets = json.loads(rel_json).get("assets", [])
+            already_ok = any(a.get("name") == APK_NAME and a.get("size") == EXPECTED_APK_SIZE for a in assets)
+            if not already_ok:
+                run_cmd([GH_EXE, "release", "upload", RELEASE_TAG, APK_REL_PATH, "--repo", REPO_SLUG, "--clobber"])
             run_cmd([GH_EXE, "release", "edit", RELEASE_TAG, "--repo", REPO_SLUG, "--notes-file", notes_path])
     finally:
         if os.path.exists(notes_path):
@@ -257,37 +260,35 @@ def deploy_gh_pages():
         run_cmd([GIT_EXE, "commit", "-m", "Deploy Crusher Core V1 landing page & QR showcase"], cwd=tmpdir)
         run_cmd([GIT_EXE, "push", "-f", REPO_GIT_URL, "gh-pages:gh-pages"], cwd=tmpdir)
 
-    rc_pages, _ = run_cmd([GH_EXE, "api", f"repos/{REPO_SLUG}/pages"], check=False)
-    if rc_pages != 0:
-        run_cmd(
-            [
-                GH_EXE,
-                "api",
-                "-X",
-                "POST",
-                f"repos/{REPO_SLUG}/pages",
-                "-f",
-                "source[branch]=gh-pages",
-                "-f",
-                "source[path]=/",
-            ]
-        )
-    else:
-        run_cmd(
-            [
-                GH_EXE,
-                "api",
-                "-X",
-                "PUT",
-                f"repos/{REPO_SLUG}/pages",
-                "-f",
-                "source[branch]=gh-pages",
-                "-f",
-                "source[path]=/",
-            ],
-            check=False,
-        )
-        run_cmd([GH_EXE, "api", "-X", "POST", f"repos/{REPO_SLUG}/pages/builds"], check=False)
+    run_cmd(
+        [
+            GH_EXE,
+            "api",
+            "-X",
+            "POST",
+            f"repos/{REPO_SLUG}/pages",
+            "-f",
+            "source[branch]=gh-pages",
+            "-f",
+            "source[path]=/",
+        ],
+        check=False,
+    )
+    run_cmd(
+        [
+            GH_EXE,
+            "api",
+            "-X",
+            "PUT",
+            f"repos/{REPO_SLUG}/pages",
+            "-f",
+            "source[branch]=gh-pages",
+            "-f",
+            "source[path]=/",
+        ],
+        check=False,
+    )
+    run_cmd([GH_EXE, "api", "-X", "POST", f"repos/{REPO_SLUG}/pages/builds"], check=False)
 
     status = "unknown"
     deadline = time.time() + 150
