@@ -344,6 +344,10 @@ namespace Crusher.UI
             _scaler.referenceResolution = isLandscape
                 ? new Vector2(LandscapeReferenceWidth, LandscapeReferenceHeight)
                 : new Vector2(ReferenceWidth, ReferenceHeight);
+            _scaler.screenMatchMode = isLandscape
+                ? CanvasScaler.ScreenMatchMode.Expand
+                : CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            _scaler.matchWidthOrHeight = 0.5f;
 
             _lastSafeArea = Rect.zero;
             if (_offscreenMode || isLandscape)

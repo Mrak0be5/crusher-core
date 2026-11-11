@@ -217,7 +217,7 @@ def publish_release_apk():
         notes_path = tf.name
 
     try:
-        rc, _ = run_cmd([GH_EXE, "release", "view", RELEASE_TAG, "--repo", REPO_SLUG], check=False)
+        rc, rel_json = run_cmd([GH_EXE, "release", "view", RELEASE_TAG, "--repo", REPO_SLUG, "--json", "assets"], check=False)
         if rc != 0:
             run_cmd(
                 [
@@ -237,7 +237,10 @@ def publish_release_apk():
                 ]
             )
         else:
-            run_cmd([GH_EXE, "release", "upload", RELEASE_TAG, APK_REL_PATH, "--repo", REPO_SLUG, "--clobber"])
+            assets = json.loads(rel_json).get("assets", [])
+            already_ok = any(a.get("name") == APK_NAME and a.get("size") == EXPECTED_APK_SIZE for a in assets)
+            if not already_ok:
+                run_cmd([GH_EXE, "release", "upload", RELEASE_TAG, APK_REL_PATH, "--repo", REPO_SLUG, "--clobber"])
             run_cmd(
                 [
                     GH_EXE,

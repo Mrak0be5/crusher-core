@@ -702,9 +702,9 @@ namespace Crusher.UI
                     {
                         float refW = targetLandscape ? 1920f : 1080f;
                         float refH = targetLandscape ? 1080f : 2400f;
-                        float logW = Mathf.Log(sw / refW, 2f);
-                        float logH = Mathf.Log(sh / refH, 2f);
-                        float scaleFactor = Mathf.Pow(2f, (logW + logH) * 0.5f);
+                        float scaleFactor = targetLandscape
+                            ? Mathf.Min(sw / refW, sh / refH)
+                            : Mathf.Pow(2f, (Mathf.Log(sw / refW, 2f) + Mathf.Log(sh / refH, 2f)) * 0.5f);
                         rw = sw / scaleFactor;
                         rh = sh / scaleFactor;
                     }

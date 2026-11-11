@@ -10,12 +10,14 @@ Strictly adheres to `chrome-background` and `NoWinGuard` rules:
     `build/qa/webgl_live_02_hangar.png`
   - Immediately closes its own test tab and verifies 100% tab cleanup + unchanged foreground HWND.
 """
+import base64
 import ctypes
 import http.client
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import time
 import uuid
@@ -104,6 +106,19 @@ class ChromeBridgeClient:
             if m:
                 return json.loads(m.group(1))
         raise RuntimeError(f"Unexpected evaluate_script format: {self.extract_text(res)[:240]}")
+
+    def save_page_screenshot(self, page_id: int, dest_path: Path):
+        res = self.call_tool("take_screenshot", pageId=page_id, format="png")
+        for item in res.get("content", []):
+            if item.get("type") == "image" and item.get("data"):
+                dest_path.write_bytes(base64.b64decode(item["data"]))
+                return
+            if item.get("type") == "text":
+                m = re.search(r"Saved screenshot to (.+?)\.\s*$", item.get("text", ""), re.M)
+                if m and os.path.isfile(m.group(1).strip()):
+                    shutil.copy2(m.group(1).strip(), dest_path)
+                    return
+        raise RuntimeError(f"Unexpected take_screenshot response: {self.extract_text(res)[:240]}")
 
     def open_background_page(self, baseline_ids: set[int]) -> int:
         res = self.call_tool("new_page", url="about:blank", background=True)
@@ -220,7 +235,6 @@ def main():
                   const pl = document.getElementById('cc-preloader');
                   const pct = document.getElementById('pl-pct');
                   const canvas = document.getElementById('unity-canvas');
-                  const gl2 = canvas ? Boolean(canvas.getContext('webgl2')) : null;
                   const hidden = pl ? (pl.classList.contains('cc-hidden') || getComputedStyle(pl).display === 'none') : false;
                   return {
                     instanceReady: Boolean(window.__crusherUnityInstance),
@@ -265,7 +279,7 @@ def main():
               const isLandscape = cw > ch * 1.1;
               let cx, cy;
               if (isLandscape) {
-                const scale = Math.sqrt((cw / 1920.0) * (ch / 1080.0));
+                const scale = Math.min(cw / 1920.0, ch / 1080.0);
                 cx = r.left + cw * 0.5 + (-710.0 + 234.0 + 143.0) * scale;
                 cy = r.top + ch - (8.0 + 128.0 + 24.0) * scale;
               } else {
@@ -292,7 +306,7 @@ def main():
         time.sleep(0.8)
 
         # Capture Screenshot 1: Live WebGL2 Combat + Upgraded Stat Card
-        bridge.call_tool("take_screenshot", pageId=page_id, format="png", filePath=str(SHOT_COMBAT))
+        bridge.save_page_screenshot(page_id, SHOT_COMBAT)
         assert SHOT_COMBAT.is_file() and SHOT_COMBAT.stat().st_size > 40_000, f"Invalid combat screenshot: {SHOT_COMBAT}"
 
         # Click Hangar Retreat button ("АНГАР") in top telemetry bar to open the armored Hangar window
@@ -305,7 +319,7 @@ def main():
               const isLandscape = cw > ch * 1.1;
               let hx, hy;
               if (isLandscape) {
-                const scale = Math.sqrt((cw / 1920.0) * (ch / 1080.0));
+                const scale = Math.min(cw / 1920.0, ch / 1080.0);
                 hx = r.left + cw * 0.5 + (-660.0 + 1170.0 + 68.0) * scale;
                 hy = r.top + (8.0 + 10.0 + 22.0) * scale;
               } else {
@@ -332,7 +346,7 @@ def main():
         time.sleep(1.3)
 
         # Capture Screenshot 2: Live WebGL2 Hangar screen over 3D foundry
-        bridge.call_tool("take_screenshot", pageId=page_id, format="png", filePath=str(SHOT_HANGAR))
+        bridge.save_page_screenshot(page_id, SHOT_HANGAR)
         assert SHOT_HANGAR.is_file() and SHOT_HANGAR.stat().st_size > 40_000, f"Invalid hangar screenshot: {SHOT_HANGAR}"
 
         # Check console errors (both captured window.__ccErrors and CDP console error log)
